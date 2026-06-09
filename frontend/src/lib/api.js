@@ -3,15 +3,59 @@ import axios from "axios";
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API_BASE = `${BACKEND_URL}/api`;
 
+const ACCESS_KEY = "mfj_access";
+const REFRESH_KEY = "mfj_refresh";
+
+export function setTokens(access, refresh) {
+  try {
+    if (access) localStorage.setItem(ACCESS_KEY, access);
+    if (refresh) localStorage.setItem(REFRESH_KEY, refresh);
+  } catch {
+    /* ignore storage errors (private mode) */
+  }
+}
+
+export function clearTokens() {
+  try {
+    localStorage.removeItem(ACCESS_KEY);
+    localStorage.removeItem(REFRESH_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function getAccessToken() {
+  try {
+    return localStorage.getItem(ACCESS_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function getRefreshToken() {
+  try {
+    return localStorage.getItem(REFRESH_KEY);
+  } catch {
+    return null;
+  }
+}
+
 const api = axios.create({
   baseURL: API_BASE,
-  withCredentials: true,
+  withCredentials: true, // also send cookies as fallback
 });
 
-// ---- Auto-refresh on 401 ----------------------------------------------------
-// On any 401, try POST /auth/refresh once (uses refresh_token cookie). If it
-// succeeds, retry the original request. If refresh also fails, redirect to login
-// (except for /auth/me and /auth/login which are expected to 401 sometimes).
+// Attach Bearer token from localStorage to every request
+api.interceptors.request.use((config) => {
+  const token = getAccessToken();
+  if (token) {
+    config.headers = config.headers || {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Auto-refresh on 401
 let refreshPromise = null;
 
 function isAuthCheckEndpoint(url = "") {
@@ -38,14 +82,21 @@ api.interceptors.response.use(
     original._retry = true;
     try {
       if (!refreshPromise) {
-        refreshPromise = api.post("/auth/refresh").finally(() => {
-          refreshPromise = null;
-        });
+        const refreshToken = getRefreshToken();
+        refreshPromise = api
+          .post("/auth/refresh", { refresh_token: refreshToken })
+          .then(({ data }) => {
+            if (data?.access_token) setTokens(data.access_token, data.refresh_token);
+            return data;
+          })
+          .finally(() => {
+            refreshPromise = null;
+          });
       }
       await refreshPromise;
       return api(original);
     } catch (refreshErr) {
-      // Refresh failed → bounce to login
+      clearTokens();
       if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
         window.location.assign("/login");
       }

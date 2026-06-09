@@ -88,9 +88,9 @@ def create_refresh_token(user_id: str) -> str:
 
 
 def set_auth_cookies(response: Response, access: str, refresh: str):
-    response.set_cookie("access_token", access, httponly=True, secure=False,
+    response.set_cookie("access_token", access, httponly=True, secure=True,
                         samesite="lax", max_age=86400, path="/")
-    response.set_cookie("refresh_token", refresh, httponly=True, secure=False,
+    response.set_cookie("refresh_token", refresh, httponly=True, secure=True,
                         samesite="lax", max_age=604800, path="/")
 
 
@@ -326,8 +326,13 @@ async def register(body: RegisterIn, response: Response):
     }
     res = await db.users.insert_one(doc)
     user_id = str(res.inserted_id)
-    set_auth_cookies(response, create_access_token(user_id, email), create_refresh_token(user_id))
-    return {"id": user_id, "email": email, "name": body.name, "role": "user"}
+    access = create_access_token(user_id, email)
+    refresh = create_refresh_token(user_id)
+    set_auth_cookies(response, access, refresh)
+    return {
+        "id": user_id, "email": email, "name": body.name, "role": "user",
+        "access_token": access, "refresh_token": refresh,
+    }
 
 
 @api.post("/auth/login")
@@ -342,8 +347,14 @@ async def login(body: LoginIn, request: Request, response: Response):
         raise HTTPException(status_code=401, detail="Email atau password salah")
     await _clear_login_attempts(identifier)
     user_id = str(user["_id"])
-    set_auth_cookies(response, create_access_token(user_id, email), create_refresh_token(user_id))
-    return {"id": user_id, "email": user["email"], "name": user.get("name", ""), "role": user.get("role", "user")}
+    access = create_access_token(user_id, email)
+    refresh = create_refresh_token(user_id)
+    set_auth_cookies(response, access, refresh)
+    return {
+        "id": user_id, "email": user["email"], "name": user.get("name", ""),
+        "role": user.get("role", "user"),
+        "access_token": access, "refresh_token": refresh,
+    }
 
 
 @api.post("/auth/logout")
@@ -353,9 +364,16 @@ async def logout(response: Response):
     return {"ok": True}
 
 
+class RefreshIn(BaseModel):
+    refresh_token: Optional[str] = None
+
+
 @api.post("/auth/refresh")
-async def refresh_token(request: Request, response: Response):
+async def refresh_token_endpoint(request: Request, response: Response, body: Optional[RefreshIn] = None):
+    # Accept refresh token from cookie OR request body
     token = request.cookies.get("refresh_token")
+    if not token and body:
+        token = body.refresh_token
     if not token:
         raise HTTPException(status_code=401, detail="Refresh token tidak tersedia")
     try:
@@ -367,12 +385,10 @@ async def refresh_token(request: Request, response: Response):
             raise HTTPException(status_code=401, detail="User tidak ditemukan")
         user_id = str(user["_id"])
         email = user["email"]
-        set_auth_cookies(
-            response,
-            create_access_token(user_id, email),
-            create_refresh_token(user_id),
-        )
-        return {"ok": True}
+        access = create_access_token(user_id, email)
+        refresh = create_refresh_token(user_id)
+        set_auth_cookies(response, access, refresh)
+        return {"ok": True, "access_token": access, "refresh_token": refresh}
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Sesi habis. Silakan login ulang.")
     except jwt.InvalidTokenError:
