@@ -353,6 +353,32 @@ async def logout(response: Response):
     return {"ok": True}
 
 
+@api.post("/auth/refresh")
+async def refresh_token(request: Request, response: Response):
+    token = request.cookies.get("refresh_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="Refresh token tidak tersedia")
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if payload.get("type") != "refresh":
+            raise HTTPException(status_code=401, detail="Token tidak valid")
+        user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
+        if not user:
+            raise HTTPException(status_code=401, detail="User tidak ditemukan")
+        user_id = str(user["_id"])
+        email = user["email"]
+        set_auth_cookies(
+            response,
+            create_access_token(user_id, email),
+            create_refresh_token(user_id),
+        )
+        return {"ok": True}
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Sesi habis. Silakan login ulang.")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Token tidak valid")
+
+
 @api.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
     return user
