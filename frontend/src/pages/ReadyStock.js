@@ -37,6 +37,7 @@ const emptyForm = {
   status: "Tersedia",
   image_path: null,
   sale_price: 0,
+  sold_date: "",
 };
 
 export default function ReadyStock() {
@@ -83,6 +84,7 @@ export default function ReadyStock() {
       status: item.status,
       image_path: item.image_path,
       sale_price: item.sale_price || 0,
+      sold_date: item.sold_date || "",
     });
     setOpen(true);
   };
@@ -250,15 +252,26 @@ export default function ReadyStock() {
                 </div>
 
                 {form.status === "Terjual" && (
-                  <div className="space-y-2">
-                    <Label className="text-xs font-bold uppercase tracking-widest text-gray-600">Harga Jual</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      value={form.sale_price}
-                      onChange={(e) => setForm({ ...form, sale_price: e.target.value })}
-                      data-testid="sale-price-input"
-                    />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <Label className="text-xs font-bold uppercase tracking-widest text-gray-600">Harga Jual</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        value={form.sale_price}
+                        onChange={(e) => setForm({ ...form, sale_price: e.target.value })}
+                        data-testid="sale-price-input"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs font-bold uppercase tracking-widest text-gray-600">Tanggal Terjual</Label>
+                      <Input
+                        type="date"
+                        value={form.sold_date || ""}
+                        onChange={(e) => setForm({ ...form, sold_date: e.target.value })}
+                        data-testid="sold-date-input"
+                      />
+                    </div>
                   </div>
                 )}
 

@@ -2,17 +2,29 @@ import { useEffect, useState } from "react";
 import api from "@/lib/api";
 import { formatRupiah, formatDate } from "@/lib/format";
 import PageHeader from "@/components/PageHeader";
+import PeriodFilter, { periodToParams } from "@/components/PeriodFilter";
 import { Card } from "@/components/ui/card";
 
 export default function ProfitLoss() {
   const [data, setData] = useState(null);
+  const [period, setPeriod] = useState("all");
 
   useEffect(() => {
-    (async () => {
-      const { data } = await api.get("/profit-loss");
-      setData(data);
-    })();
+    let active = true;
+    api
+      .get("/profit-loss", { params: periodToParams("all") })
+      .then(({ data }) => active && setData(data));
+    return () => {
+      active = false;
+    };
   }, []);
+
+  const onPeriodChange = async (p) => {
+    setPeriod(p);
+    setData(null);
+    const { data } = await api.get("/profit-loss", { params: periodToParams(p) });
+    setData(data);
+  };
 
   if (!data) return <div className="p-10 text-sm text-gray-500 font-mono uppercase tracking-widest">Memuat...</div>;
 
@@ -24,21 +36,26 @@ export default function ProfitLoss() {
         eyebrow="05 — Performansi"
         title="Laporan Laba Rugi"
         description="Ringkasan keuntungan dari penjualan jersey dikurangi biaya operasional."
+        action={<PeriodFilter value={period} onChange={onPeriodChange} testid="pl-period" />}
       />
 
       <Card className="border border-gray-200 bg-white p-6 sm:p-10" data-testid="pl-card">
-        {/* Pendapatan */}
         <Section title="Pendapatan">
           <Row label="Penjualan Jersey" value={formatRupiah(data.sales)} />
           <Row label="Harga Pokok Penjualan (HPP)" value={`(${formatRupiah(data.cogs)})`} />
           <Divider />
-          <Row label="Laba Kotor" value={formatRupiah(data.gross_profit)} bold positive={data.gross_profit >= 0} negative={data.gross_profit < 0} />
+          <Row
+            label="Laba Kotor"
+            value={formatRupiah(data.gross_profit)}
+            bold
+            positive={data.gross_profit >= 0}
+            negative={data.gross_profit < 0}
+          />
         </Section>
 
-        {/* Biaya */}
         <Section title="Biaya-Biaya Operasional">
           {data.expenses.length === 0 ? (
-            <div className="text-sm text-gray-500 italic">Belum ada biaya tercatat.</div>
+            <div className="text-sm text-gray-500 italic">Belum ada biaya tercatat pada periode ini.</div>
           ) : (
             data.expenses.map((e, i) => (
               <Row key={i} label={`${e.description} · ${formatDate(e.date)}`} value={`(${formatRupiah(e.amount)})`} muted />
@@ -48,10 +65,9 @@ export default function ProfitLoss() {
           <Row label="Total Biaya" value={`(${formatRupiah(data.total_expenses)})`} bold negative />
         </Section>
 
-        {/* Pendapatan Lain */}
         <Section title="Pendapatan Lain-Lain">
           {data.other_income_items.length === 0 ? (
-            <div className="text-sm text-gray-500 italic">Tidak ada pendapatan lain.</div>
+            <div className="text-sm text-gray-500 italic">Tidak ada pendapatan lain pada periode ini.</div>
           ) : (
             data.other_income_items.map((e, i) => (
               <Row key={i} label={`${e.description} · ${formatDate(e.date)}`} value={formatRupiah(e.amount)} muted />
@@ -61,7 +77,6 @@ export default function ProfitLoss() {
           <Row label="Total Pendapatan Lain" value={formatRupiah(data.other_income)} bold positive />
         </Section>
 
-        {/* Net */}
         <div className={`mt-10 p-6 border-2 ${positive ? "border-emerald-700 bg-emerald-50" : "border-red-700 bg-red-50"} rounded-md`}>
           <div className="flex items-baseline justify-between">
             <div>

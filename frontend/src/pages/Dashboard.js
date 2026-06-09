@@ -11,11 +11,24 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  Legend,
+} from "recharts";
 import { TrendingUp, Wallet, Package, Coins, ArrowUpRight, ArrowDownRight } from "lucide-react";
 
 function Stat({ label, value, sub, accent, icon: Icon, testid }) {
   return (
-    <Card className="border border-gray-200 bg-white p-6 sm:p-8 hover:-translate-y-1 hover:shadow-lg hover:border-gray-300 transition-all duration-200" data-testid={testid}>
+    <Card
+      className="border border-gray-200 bg-white p-6 sm:p-8 hover:-translate-y-1 hover:shadow-lg hover:border-gray-300 transition-all duration-200"
+      data-testid={testid}
+    >
       <div className="flex items-start justify-between">
         <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">{label}</div>
         {Icon && <Icon className="w-4 h-4 text-gray-400" />}
@@ -28,15 +41,27 @@ function Stat({ label, value, sub, accent, icon: Icon, testid }) {
   );
 }
 
+function compactRupiah(n) {
+  const v = Number(n || 0);
+  if (Math.abs(v) >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}jt`;
+  if (Math.abs(v) >= 1_000) return `${(v / 1_000).toFixed(0)}rb`;
+  return `${v}`;
+}
+
 export default function Dashboard() {
   const [data, setData] = useState(null);
+  const [chart, setChart] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
       try {
-        const { data } = await api.get("/summary");
-        setData(data);
+        const [{ data: summary }, { data: chartData }] = await Promise.all([
+          api.get("/summary"),
+          api.get("/dashboard-chart"),
+        ]);
+        setData(summary);
+        setChart(chartData.months || []);
       } finally {
         setLoading(false);
       }
@@ -44,7 +69,11 @@ export default function Dashboard() {
   }, []);
 
   if (loading) {
-    return <div className="p-10 text-sm text-gray-500 font-mono uppercase tracking-widest">Memuat ringkasan...</div>;
+    return (
+      <div className="p-10 text-sm text-gray-500 font-mono uppercase tracking-widest">
+        Memuat ringkasan...
+      </div>
+    );
   }
   if (!data) return null;
 
@@ -59,12 +88,7 @@ export default function Dashboard() {
       />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
-        <Stat
-          label="Total Aset"
-          value={formatRupiah(data.total_assets)}
-          icon={Wallet}
-          testid="stat-total-assets"
-        />
+        <Stat label="Total Aset" value={formatRupiah(data.total_assets)} icon={Wallet} testid="stat-total-assets" />
         <Stat
           label="Laba Bersih"
           value={formatRupiah(data.net_profit)}
@@ -73,12 +97,7 @@ export default function Dashboard() {
           icon={TrendingUp}
           testid="stat-net-profit"
         />
-        <Stat
-          label="Saldo Kas"
-          value={formatRupiah(data.cash_balance)}
-          icon={Coins}
-          testid="stat-cash-balance"
-        />
+        <Stat label="Saldo Kas" value={formatRupiah(data.cash_balance)} icon={Coins} testid="stat-cash-balance" />
         <Stat
           label="Nilai Persediaan"
           value={formatRupiah(data.inventory_value)}
@@ -87,6 +106,72 @@ export default function Dashboard() {
           testid="stat-inventory"
         />
       </div>
+
+      {/* CHART */}
+      <Card className="border border-gray-200 bg-white p-6 sm:p-8 mb-6" data-testid="chart-card">
+        <div className="flex items-baseline justify-between mb-6">
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">Arus Kas — 6 Bulan</div>
+            <div className="font-heading text-xl font-semibold text-gray-900 mt-1">Pemasukan vs Pengeluaran</div>
+          </div>
+          <div className="flex items-center gap-4 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-sm bg-emerald-600 inline-block" />
+              <span className="text-gray-600 font-medium">Pemasukan</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-sm bg-red-700 inline-block" />
+              <span className="text-gray-600 font-medium">Pengeluaran</span>
+            </div>
+          </div>
+        </div>
+        <div className="h-64">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={chart} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+              <defs>
+                <linearGradient id="incomeGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#059669" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="#059669" stopOpacity={0} />
+                </linearGradient>
+                <linearGradient id="expenseGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#b91c1c" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="#b91c1c" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="#f3f4f6" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#6b7280" }} axisLine={false} tickLine={false} />
+              <YAxis
+                tick={{ fontSize: 11, fill: "#6b7280" }}
+                axisLine={false}
+                tickLine={false}
+                tickFormatter={compactRupiah}
+                width={50}
+              />
+              <Tooltip
+                contentStyle={{ fontSize: 12, borderRadius: 6, border: "1px solid #e5e7eb" }}
+                formatter={(v) => formatRupiah(v)}
+                labelStyle={{ color: "#111827", fontWeight: 600 }}
+              />
+              <Area
+                type="monotone"
+                dataKey="income"
+                stroke="#059669"
+                strokeWidth={2}
+                fill="url(#incomeGrad)"
+                name="Pemasukan"
+              />
+              <Area
+                type="monotone"
+                dataKey="expense"
+                stroke="#b91c1c"
+                strokeWidth={2}
+                fill="url(#expenseGrad)"
+                name="Pengeluaran"
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-2 border border-gray-200 p-6 sm:p-8 bg-white">

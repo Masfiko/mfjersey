@@ -1,0 +1,44 @@
+{
+  "summary": "Iteration 2 tested. Backend: 9/11 pytest pass. Auto-tx sync (pembelian on create, penjualan on mark-sold, revert removes penjualan, delete removes both) ALL pass. Period filter on cash-book + profit-loss pass. Dashboard chart returns 6 monthly buckets correctly. End-to-end balanced scenario (kas 1,000,000 → buy 120,000 → sell 200,000) → aktiva 1,080,000 == pasiva 1,080,000 PASS. CRITICAL BUG: brute-force lockout NEVER triggers in production because Kubernetes ingress proxies requests via DIFFERENT pod IPs (10.208.130.77, 10.208.130.78), so identifier 'ip:email' is sharded across pods and count never reaches 5. Verified via mongo: separate login_attempts docs exist for the same email with different proxy IPs. Frontend: Dashboard area chart renders with Pemasukan/Pengeluaran legend; CashBook period dropdown works; inline edit dialog opens prefilled and PUT succeeds; ProfitLoss pl-period works; ReadyStock Terjual flow shows both sale-price-input AND sold-date-input.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "/api/auth/login", "issue": "Brute-force lockout NEVER triggers behind Kubernetes ingress. The identifier is built from request.client.host which returns the proxy/pod IP (NOT the real client IP), and the loadbalancer alternates between multiple proxy IPs (10.208.130.77 / 10.208.130.78). As a result every other failed attempt creates a NEW login_attempts document, the per-identifier count stays below 5, and the 6th attempt still returns 401 instead of 429. Effective brute-force protection in production = ZERO. Fix: read X-Forwarded-For (first hop) or X-Real-IP as the client IP, OR scope the identifier by email only (with a small per-IP fallback). Reproduction: run 7 sequential failed logins for the same fresh email — all return 401, never 429. Mongo shows multiple identifier docs (10.208.130.77:email vs 10.208.130.78:email) each with count<5.", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "/api/auth/login", "issue": "Even if the IP issue is fixed, identifier scopes ip+email together. An attacker rotating emails (or behind NAT) won't be locked out for a specific account. Consider a second counter scoped by email-only."},
+      {"endpoint": "/api/auth/me / cookies", "issue": "set_auth_cookies uses secure=False; preview environment is HTTPS but cookies will also work over HTTP — fine for now but flag for production hardening."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Ready Stock — Tambah Item dialog", "issues": ["sold-date-input uses the browser's native date picker (mm/dd/yyyy) instead of the shadcn Calendar component used elsewhere — inconsistent UX. Same likely applies to tx-date-input in Cash Book."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iteration_2.py", "/app/backend/tests/backend_test.py", "/app/test_reports/pytest/iteration_2_results.xml"],
+  "action_items": [
+    "FIX CRITICAL: rewrite _check_lockout / _record_failed_login identifier to use the real client IP from X-Forwarded-For (request.headers.get('x-forwarded-for','').split(',')[0].strip()) rather than request.client.host, OR drop the IP component entirely and lock per-email (with a small grace).",
+    "(optional) Replace browser-default date inputs in ReadyStock (sold_date) and CashBook (tx-date) with shadcn Calendar+Popover for consistent UX.",
+    "(optional) Tests had 3 PytestReturnNotNoneWarning because TestAutoTxSync methods return item_id for chaining — harmless but consider refactoring to use a fixture."
+  ],
+  "critical_code_review_comments": [
+    "server.py login(): identifier = f'{ip}:{email}' is broken behind any reverse-proxy / k8s ingress. Always derive the client IP from X-Forwarded-For when behind a trust boundary.",
+    "server.py CORS: allow_credentials=True together with allow_origins='*' is INVALID per CORS spec and browsers will refuse to send cookies if a real origin is ever set. Replace '*' with the explicit preview origin from env.",
+    "server.py: _sync_ready_stock_txs lacks atomic transactions; if the insert/update succeeds but a subsequent failure occurs, ready_stock and transactions can drift out of sync. Acceptable for MVP, flag for later.",
+    "server.py: balance_sheet calls profit_loss(user) but ignores period/ym/year — so 'laba_ditahan' is always all-time. That's the intended definition but should be commented.",
+    "server.py: dashboard_chart inner loop walks back i months by decrementing — works but dateutil.relativedelta is cleaner.",
+    "server.py is 834 lines — should be split into routers (auth, stock, cash, reports) before it grows further.",
+    "Cash book closing_balance calculation excludes future-dated txs from the listing but still includes them in net_cash_change for balance-sheet — inconsistency between cash-book view and balance-sheet kas value when txs are dated outside the chosen period."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_2.py"
+  ],
+  "success_rate": {"backend": "82% (9/11) — lockout bug accounts for both failures", "frontend": "100% on the 6 new feature flows"},
+  "test_credentials": "admin@mfjersey.id / admin123 (seeded). New users via /api/auth/register.",
+  "seed_data_creation": "Cleaned login_attempts/transactions/ready_stock at end of run. Fresh e2e user was created on the fly per test.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Critical brute-force lockout bug: identifier uses request.client.host which differs across k8s pods, so count never accumulates. Look in /app/backend/server.py login() around line 336 and _check_lockout / _record_failed_login. After fix, re-run /app/backend/tests/test_iteration_2.py::TestBruteForce — both tests should pass. All other iteration-2 features (auto-tx sync, period filter, dashboard chart, e2e balanced scenario) verified working end-to-end on backend AND frontend. PeriodFilter via URL stays on the same path but the page re-fetches with ?period=... in the GET. Sold date input is a native browser <input type=date> — not blocking.",
+  "rca of the issue": "RCA: server.py:336 sets `ip = request.client.host` and forms `identifier = f'{ip}:{email}'`. In a Kubernetes ingress / multi-replica setup, requests reach the FastAPI app via different ingress proxy pods (observed 10.208.130.77 and 10.208.130.78), and request.client.host returns the immediate TCP peer (the proxy), NOT the real client IP. With ~50/50 round-robin between two proxy IPs, the upsert in _record_failed_login creates TWO separate login_attempts docs for the same email, each with count ≈ N/2. After 5 failed attempts the highest single-document count is typically 3, so _check_lockout (which requires count >= 5) never triggers. Reproduction: 7 sequential POST /api/auth/login with wrong password for the same fresh email → all 7 return 401, none 429. Mongo dump confirms multiple identifier rows per email. Mitigation: change identifier to use X-Forwarded-For (`request.headers.get('x-forwarded-for','').split(',')[0].strip() or request.client.host`) OR scope identifier by email only. The latter is simpler and matches the playbook semantics ('5 failed attempts per account')."
+}

@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { formatRupiah, formatDate } from "@/lib/format";
 import PageHeader from "@/components/PageHeader";
+import PeriodFilter, { periodToParams } from "@/components/PeriodFilter";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -16,7 +18,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Edit, Sparkles } from "lucide-react";
 
 const CATEGORIES = [
   { value: "penjualan", label: "Penjualan" },
@@ -26,23 +28,25 @@ const CATEGORIES = [
   { value: "lainnya", label: "Lainnya" },
 ];
 
-const emptyForm = {
+const emptyForm = () => ({
   date: new Date().toISOString().slice(0, 10),
   description: "",
   income: 0,
   expense: 0,
   category: "lainnya",
-};
+});
 
 export default function CashBook() {
   const [data, setData] = useState({ opening_balance: 0, transactions: [], closing_balance: 0 });
+  const [period, setPeriod] = useState("all");
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState(emptyForm);
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState(emptyForm());
   const [loading, setLoading] = useState(true);
 
-  const load = async () => {
+  const load = async (p = period) => {
     try {
-      const { data } = await api.get("/cash-book");
+      const { data } = await api.get("/cash-book", { params: periodToParams(p) });
       setData(data);
     } finally {
       setLoading(false);
@@ -52,7 +56,7 @@ export default function CashBook() {
   useEffect(() => {
     let active = true;
     api
-      .get("/cash-book")
+      .get("/cash-book", { params: periodToParams("all") })
       .then(({ data }) => active && setData(data))
       .finally(() => active && setLoading(false));
     return () => {
@@ -60,27 +64,64 @@ export default function CashBook() {
     };
   }, []);
 
+  const onPeriodChange = async (p) => {
+    setPeriod(p);
+    setLoading(true);
+    await load(p);
+  };
+
+  const openCreate = () => {
+    setEditing(null);
+    setForm(emptyForm());
+    setOpen(true);
+  };
+
+  const openEdit = (tx) => {
+    if (tx.auto) {
+      toast.info("Transaksi otomatis dari Ready Stock. Ubah lewat halaman Ready Stock.");
+      return;
+    }
+    setEditing(tx);
+    setForm({
+      date: tx.date,
+      description: tx.description,
+      income: tx.income || 0,
+      expense: tx.expense || 0,
+      category: tx.category || "lainnya",
+    });
+    setOpen(true);
+  };
+
   const submit = async (e) => {
     e.preventDefault();
     try {
-      await api.post("/cash-book", {
+      const payload = {
         ...form,
         income: Number(form.income) || 0,
         expense: Number(form.expense) || 0,
-      });
-      toast.success("Transaksi tercatat");
+      };
+      if (editing) {
+        await api.put(`/cash-book/${editing.id}`, payload);
+        toast.success("Transaksi diperbarui");
+      } else {
+        await api.post("/cash-book", payload);
+        toast.success("Transaksi tercatat");
+      }
       setOpen(false);
-      setForm(emptyForm);
       await load();
     } catch (err) {
       toast.error(formatApiError(err.response?.data?.detail));
     }
   };
 
-  const handleDelete = async (id) => {
+  const handleDelete = async (tx) => {
+    if (tx.auto) {
+      toast.info("Hapus item Ready Stock terkait untuk menghapus transaksi otomatis.");
+      return;
+    }
     if (!window.confirm("Hapus transaksi ini?")) return;
     try {
-      await api.delete(`/cash-book/${id}`);
+      await api.delete(`/cash-book/${tx.id}`);
       toast.success("Transaksi dihapus");
       await load();
     } catch (err) {
@@ -98,92 +139,98 @@ export default function CashBook() {
         title="Buku Kas Bank"
         description="Catat seluruh arus kas masuk dan keluar. Saldo dihitung otomatis dari saldo awal."
         action={
-          <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger asChild>
-              <Button
-                className="bg-blue-900 hover:bg-blue-800 text-white font-medium"
-                data-testid="add-transaction-button"
-              >
-                <Plus className="w-4 h-4 mr-2" /> Transaksi Baru
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-lg">
-              <DialogHeader>
-                <DialogTitle className="font-heading text-2xl tracking-tight">Tambah Transaksi</DialogTitle>
-              </DialogHeader>
-              <form onSubmit={submit} className="space-y-4">
-                <div className="grid grid-cols-2 gap-3">
+          <div className="flex items-center gap-3">
+            <PeriodFilter value={period} onChange={onPeriodChange} testid="cashbook-period" />
+            <Dialog open={open} onOpenChange={setOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  onClick={openCreate}
+                  className="bg-blue-900 hover:bg-blue-800 text-white font-medium"
+                  data-testid="add-transaction-button"
+                >
+                  <Plus className="w-4 h-4 mr-2" /> Transaksi Baru
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-lg">
+                <DialogHeader>
+                  <DialogTitle className="font-heading text-2xl tracking-tight">
+                    {editing ? "Edit Transaksi" : "Tambah Transaksi"}
+                  </DialogTitle>
+                </DialogHeader>
+                <form onSubmit={submit} className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <Label className="text-xs font-bold uppercase tracking-widest text-gray-600">Tanggal</Label>
+                      <Input
+                        type="date"
+                        value={form.date}
+                        onChange={(e) => setForm({ ...form, date: e.target.value })}
+                        required
+                        data-testid="tx-date-input"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs font-bold uppercase tracking-widest text-gray-600">Kategori</Label>
+                      <Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}>
+                        <SelectTrigger data-testid="tx-category-select">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {CATEGORIES.map((c) => (
+                            <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
                   <div className="space-y-2">
-                    <Label className="text-xs font-bold uppercase tracking-widest text-gray-600">Tanggal</Label>
+                    <Label className="text-xs font-bold uppercase tracking-widest text-gray-600">Deskripsi</Label>
                     <Input
-                      type="date"
-                      value={form.date}
-                      onChange={(e) => setForm({ ...form, date: e.target.value })}
+                      value={form.description}
+                      onChange={(e) => setForm({ ...form, description: e.target.value })}
+                      placeholder="cth. Penjualan jersey Milan"
                       required
-                      data-testid="tx-date-input"
+                      data-testid="tx-description-input"
                     />
                   </div>
-                  <div className="space-y-2">
-                    <Label className="text-xs font-bold uppercase tracking-widest text-gray-600">Kategori</Label>
-                    <Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}>
-                      <SelectTrigger data-testid="tx-category-select">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {CATEGORIES.map((c) => (
-                          <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-2">
+                      <Label className="text-xs font-bold uppercase tracking-widest text-emerald-700">Pemasukan</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        value={form.income}
+                        onChange={(e) => setForm({ ...form, income: e.target.value })}
+                        data-testid="tx-income-input"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs font-bold uppercase tracking-widest text-red-700">Pengeluaran</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        value={form.expense}
+                        onChange={(e) => setForm({ ...form, expense: e.target.value })}
+                        data-testid="tx-expense-input"
+                      />
+                    </div>
                   </div>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-xs font-bold uppercase tracking-widest text-gray-600">Deskripsi</Label>
-                  <Input
-                    value={form.description}
-                    onChange={(e) => setForm({ ...form, description: e.target.value })}
-                    placeholder="cth. Penjualan jersey Milan"
-                    required
-                    data-testid="tx-description-input"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-2">
-                    <Label className="text-xs font-bold uppercase tracking-widest text-emerald-700">Pemasukan</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      value={form.income}
-                      onChange={(e) => setForm({ ...form, income: e.target.value })}
-                      data-testid="tx-income-input"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label className="text-xs font-bold uppercase tracking-widest text-red-700">Pengeluaran</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      value={form.expense}
-                      onChange={(e) => setForm({ ...form, expense: e.target.value })}
-                      data-testid="tx-expense-input"
-                    />
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setOpen(false)}>Batal</Button>
-                  <Button type="submit" className="bg-blue-900 hover:bg-blue-800 text-white" data-testid="save-tx-button">
-                    Simpan
-                  </Button>
-                </DialogFooter>
-              </form>
-            </DialogContent>
-          </Dialog>
+                  <DialogFooter>
+                    <Button type="button" variant="outline" onClick={() => setOpen(false)}>Batal</Button>
+                    <Button type="submit" className="bg-blue-900 hover:bg-blue-800 text-white" data-testid="save-tx-button">
+                      {editing ? "Simpan" : "Tambah"}
+                    </Button>
+                  </DialogFooter>
+                </form>
+              </DialogContent>
+            </Dialog>
+          </div>
         }
       />
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 mb-6">
         <Card className="border border-gray-200 bg-white p-6">
-          <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">Saldo Awal</div>
+          <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-500">Saldo Awal Periode</div>
           <div className="font-heading text-2xl font-bold mt-2 tabular-nums" data-testid="opening-balance">
             {formatRupiah(data.opening_balance)}
           </div>
@@ -228,7 +275,7 @@ export default function CashBook() {
               {data.transactions.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={6} className="text-center text-sm text-gray-500 py-8">
-                    Belum ada transaksi.
+                    Belum ada transaksi pada periode ini.
                   </TableCell>
                 </TableRow>
               ) : (
@@ -236,9 +283,18 @@ export default function CashBook() {
                   <TableRow key={tx.id} data-testid={`tx-row-${tx.id}`}>
                     <TableCell className="font-mono text-xs">{formatDate(tx.date)}</TableCell>
                     <TableCell>
-                      <div className="font-medium text-gray-900">{tx.description}</div>
-                      <div className="text-[10px] uppercase tracking-widest text-gray-500 mt-0.5">
-                        {(CATEGORIES.find((c) => c.value === tx.category) || {}).label || tx.category}
+                      <div className="flex items-center gap-2">
+                        <div>
+                          <div className="font-medium text-gray-900">{tx.description}</div>
+                          <div className="text-[10px] uppercase tracking-widest text-gray-500 mt-0.5">
+                            {(CATEGORIES.find((c) => c.value === tx.category) || {}).label || tx.category}
+                          </div>
+                        </div>
+                        {tx.auto && (
+                          <Badge className="bg-blue-50 text-blue-900 border border-blue-200 font-medium text-[10px]" data-testid={`auto-badge-${tx.id}`}>
+                            <Sparkles className="w-3 h-3 mr-1" /> Otomatis
+                          </Badge>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-emerald-800">
@@ -251,14 +307,28 @@ export default function CashBook() {
                       {formatRupiah(tx.balance)}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleDelete(tx.id)}
-                        data-testid={`delete-tx-${tx.id}`}
-                      >
-                        <Trash2 className="w-4 h-4 text-red-700" />
-                      </Button>
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => openEdit(tx)}
+                          data-testid={`edit-tx-${tx.id}`}
+                          disabled={tx.auto}
+                          title={tx.auto ? "Auto — ubah lewat Ready Stock" : "Edit"}
+                        >
+                          <Edit className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleDelete(tx)}
+                          data-testid={`delete-tx-${tx.id}`}
+                          disabled={tx.auto}
+                          title={tx.auto ? "Auto — hapus lewat Ready Stock" : "Hapus"}
+                        >
+                          <Trash2 className="w-4 h-4 text-red-700" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))

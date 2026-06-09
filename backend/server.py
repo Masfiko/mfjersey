@@ -222,6 +222,94 @@ class TransactionIn(BaseModel):
 
 
 # ----------------------------------------------------------------------------
+# Period helpers
+# ----------------------------------------------------------------------------
+def _period_range(period: Optional[str], ym: Optional[str], year: Optional[str]):
+    """Return (start_iso, end_iso) inclusive YYYY-MM-DD strings or (None, None) for all."""
+    today = datetime.now(timezone.utc).date()
+    if ym:
+        try:
+            y, m = ym.split("-")
+            y, m = int(y), int(m)
+            start = datetime(y, m, 1).date()
+            end = datetime(y + (1 if m == 12 else 0), 1 if m == 12 else m + 1, 1).date() - timedelta(days=1)
+            return start.isoformat(), end.isoformat()
+        except Exception:
+            return None, None
+    if year:
+        try:
+            y = int(year)
+            return datetime(y, 1, 1).date().isoformat(), datetime(y, 12, 31).date().isoformat()
+        except Exception:
+            return None, None
+    if period == "this_month":
+        start = today.replace(day=1)
+        next_m = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        end = next_m - timedelta(days=1)
+        return start.isoformat(), end.isoformat()
+    if period == "last_month":
+        first_this = today.replace(day=1)
+        last_prev = first_this - timedelta(days=1)
+        start = last_prev.replace(day=1)
+        return start.isoformat(), last_prev.isoformat()
+    if period == "this_year":
+        return datetime(today.year, 1, 1).date().isoformat(), datetime(today.year, 12, 31).date().isoformat()
+    return None, None
+
+
+def _in_range(d: str, start: Optional[str], end: Optional[str]) -> bool:
+    if not d:
+        return False
+    if start and d < start:
+        return False
+    if end and d > end:
+        return False
+    return True
+
+
+# ----------------------------------------------------------------------------
+# Brute force protection
+# ----------------------------------------------------------------------------
+LOCKOUT_THRESHOLD = 5
+LOCKOUT_WINDOW = timedelta(minutes=15)
+
+
+async def _check_lockout(identifier: str):
+    rec = await db.login_attempts.find_one({"identifier": identifier})
+    if not rec:
+        return
+    count = int(rec.get("count", 0))
+    last = rec.get("last_failed_at")
+    if count >= LOCKOUT_THRESHOLD and last:
+        try:
+            last_dt = datetime.fromisoformat(last)
+            elapsed = datetime.now(timezone.utc) - last_dt
+            if elapsed < LOCKOUT_WINDOW:
+                remaining = int((LOCKOUT_WINDOW - elapsed).total_seconds() // 60) + 1
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Terlalu banyak percobaan gagal. Coba lagi dalam {remaining} menit.",
+                )
+        except ValueError:
+            pass
+
+
+async def _record_failed_login(identifier: str):
+    await db.login_attempts.update_one(
+        {"identifier": identifier},
+        {
+            "$inc": {"count": 1},
+            "$set": {"last_failed_at": datetime.now(timezone.utc).isoformat()},
+        },
+        upsert=True,
+    )
+
+
+async def _clear_login_attempts(identifier: str):
+    await db.login_attempts.delete_one({"identifier": identifier})
+
+
+# ----------------------------------------------------------------------------
 # Auth endpoints
 # ----------------------------------------------------------------------------
 @api.post("/auth/register")
@@ -243,11 +331,16 @@ async def register(body: RegisterIn, response: Response):
 
 
 @api.post("/auth/login")
-async def login(body: LoginIn, response: Response):
+async def login(body: LoginIn, request: Request, response: Response):
     email = body.email.lower().strip()
+    ip = (request.client.host if request.client else "unknown")
+    identifier = f"{ip}:{email}"
+    await _check_lockout(identifier)
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(body.password, user["password_hash"]):
+        await _record_failed_login(identifier)
         raise HTTPException(status_code=401, detail="Email atau password salah")
+    await _clear_login_attempts(identifier)
     user_id = str(user["_id"])
     set_auth_cookies(response, create_access_token(user_id, email), create_refresh_token(user_id))
     return {"id": user_id, "email": user["email"], "name": user.get("name", ""), "role": user.get("role", "user")}
@@ -278,6 +371,67 @@ def _clean_ready(item: dict) -> dict:
     return item
 
 
+def _short_date(iso_or_date: Optional[str]) -> str:
+    if not iso_or_date:
+        return datetime.now(timezone.utc).date().isoformat()
+    return iso_or_date[:10]
+
+
+async def _sync_ready_stock_txs(item: dict, user_id: str):
+    """Ensure derived cash-book entries (pembelian + optional penjualan) match the item."""
+    total_cost = _ready_total(item)
+    name = item.get("item_name", "Item")
+    item_id = item["id"]
+    # Pembelian (always exists)
+    pembelian_doc = {
+        "user_id": user_id,
+        "ready_stock_id": item_id,
+        "kind": "pembelian",
+        "category": "pembelian",
+        "date": _short_date(item.get("created_at")),
+        "description": f"Pembelian {name}",
+        "income": 0,
+        "expense": total_cost,
+        "auto": True,
+    }
+    existing = await db.transactions.find_one({"ready_stock_id": item_id, "kind": "pembelian"})
+    if existing:
+        pembelian_doc["id"] = existing["id"]
+        pembelian_doc["created_at"] = existing.get("created_at", datetime.now(timezone.utc).isoformat())
+        await db.transactions.update_one({"id": existing["id"]}, {"$set": pembelian_doc})
+    else:
+        pembelian_doc["id"] = str(uuid.uuid4())
+        pembelian_doc["created_at"] = datetime.now(timezone.utc).isoformat()
+        await db.transactions.insert_one(pembelian_doc)
+
+    # Penjualan (only when status == terjual and sale_price > 0)
+    is_sold = item.get("status", "").lower() == "terjual"
+    sale_price = float(item.get("sale_price", 0) or 0)
+    existing_sale = await db.transactions.find_one({"ready_stock_id": item_id, "kind": "penjualan"})
+    if is_sold and sale_price > 0:
+        penjualan_doc = {
+            "user_id": user_id,
+            "ready_stock_id": item_id,
+            "kind": "penjualan",
+            "category": "penjualan",
+            "date": _short_date(item.get("sold_date")),
+            "description": f"Penjualan {name}",
+            "income": sale_price,
+            "expense": 0,
+            "auto": True,
+        }
+        if existing_sale:
+            penjualan_doc["id"] = existing_sale["id"]
+            penjualan_doc["created_at"] = existing_sale.get("created_at", datetime.now(timezone.utc).isoformat())
+            await db.transactions.update_one({"id": existing_sale["id"]}, {"$set": penjualan_doc})
+        else:
+            penjualan_doc["id"] = str(uuid.uuid4())
+            penjualan_doc["created_at"] = datetime.now(timezone.utc).isoformat()
+            await db.transactions.insert_one(penjualan_doc)
+    elif existing_sale:
+        await db.transactions.delete_one({"id": existing_sale["id"]})
+
+
 @api.get("/ready-stock")
 async def list_ready_stock(user: dict = Depends(get_current_user)):
     items = await db.ready_stock.find({"user_id": user["id"]}).sort("created_at", -1).to_list(1000)
@@ -291,6 +445,7 @@ async def create_ready_stock(body: ReadyStockIn, user: dict = Depends(get_curren
     doc["user_id"] = user["id"]
     doc["created_at"] = datetime.now(timezone.utc).isoformat()
     await db.ready_stock.insert_one(doc)
+    await _sync_ready_stock_txs(doc, user["id"])
     return _clean_ready(doc)
 
 
@@ -304,6 +459,7 @@ async def update_ready_stock(item_id: str, body: ReadyStockIn, user: dict = Depe
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Item tidak ditemukan")
     item = await db.ready_stock.find_one({"id": item_id, "user_id": user["id"]})
+    await _sync_ready_stock_txs(item, user["id"])
     return _clean_ready(item)
 
 
@@ -312,6 +468,7 @@ async def delete_ready_stock(item_id: str, user: dict = Depends(get_current_user
     res = await db.ready_stock.delete_one({"id": item_id, "user_id": user["id"]})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Item tidak ditemukan")
+    await db.transactions.delete_many({"ready_stock_id": item_id, "user_id": user["id"]})
     return {"ok": True}
 
 
@@ -400,19 +557,40 @@ async def update_beginning_balance(body: BeginningBalanceIn, user: dict = Depend
 # Bank Cash Book
 # ----------------------------------------------------------------------------
 @api.get("/cash-book")
-async def list_cash_book(user: dict = Depends(get_current_user)):
-    txs = await db.transactions.find({"user_id": user["id"]}).sort("date", 1).to_list(2000)
-    # Compute running balance using beginning balance kas+kas_bank
+async def list_cash_book(
+    user: dict = Depends(get_current_user),
+    period: Optional[str] = Query(None),
+    ym: Optional[str] = Query(None),
+    year: Optional[str] = Query(None),
+):
+    start, end = _period_range(period, ym, year)
+    txs = await db.transactions.find({"user_id": user["id"]}).sort("date", 1).to_list(5000)
     bb = await db.beginning_balance.find_one({"user_id": user["id"]}) or {}
-    balance = float(bb.get("kas", 0)) + float(bb.get("kas_bank", 0))
-    result = []
+    bb_total = float(bb.get("kas", 0)) + float(bb.get("kas_bank", 0))
+
+    opening_balance = bb_total
+    in_period = []
     for tx in txs:
         tx.pop("_id", None)
+        d = tx.get("date", "")
+        if start and d and d < start:
+            opening_balance += float(tx.get("income", 0)) - float(tx.get("expense", 0))
+        elif _in_range(d, start, end):
+            in_period.append(tx)
+        # txs after period are ignored for the listing
+
+    balance = opening_balance
+    result = []
+    for tx in in_period:
         balance += float(tx.get("income", 0)) - float(tx.get("expense", 0))
         tx["balance"] = balance
         result.append(tx)
-    return {"opening_balance": float(bb.get("kas", 0)) + float(bb.get("kas_bank", 0)),
-            "transactions": result, "closing_balance": balance}
+    return {
+        "opening_balance": opening_balance,
+        "transactions": result,
+        "closing_balance": balance,
+        "period": {"start": start, "end": end},
+    }
 
 
 @api.post("/cash-book")
@@ -449,23 +627,37 @@ async def delete_transaction(tx_id: str, user: dict = Depends(get_current_user))
 # Profit & Loss
 # ----------------------------------------------------------------------------
 @api.get("/profit-loss")
-async def profit_loss(user: dict = Depends(get_current_user)):
-    # Sales = sum of sale_price for terjual items
+async def profit_loss(
+    user: dict = Depends(get_current_user),
+    period: Optional[str] = Query(None),
+    ym: Optional[str] = Query(None),
+    year: Optional[str] = Query(None),
+):
+    start, end = _period_range(period, ym, year)
+    # Sales = sum of sale_price for terjual items in period
     items = await db.ready_stock.find({"user_id": user["id"]}).to_list(2000)
-    sold = [i for i in items if (i.get("status", "").lower() == "terjual")]
+    sold = []
+    for i in items:
+        if i.get("status", "").lower() != "terjual":
+            continue
+        sd = (i.get("sold_date") or "")[:10]
+        if not start or _in_range(sd, start, end):
+            sold.append(i)
     sales = sum(float(i.get("sale_price", 0) or 0) for i in sold)
     cogs = sum(_ready_total(i) for i in sold)
     gross_profit = sales - cogs
 
-    txs = await db.transactions.find({"user_id": user["id"]}).to_list(2000)
-    expenses_list = [t for t in txs if t.get("category") == "biaya"]
-    other_income_list = [t for t in txs if t.get("category") == "pendapatan_lain"]
+    txs = await db.transactions.find({"user_id": user["id"]}).to_list(5000)
+    in_period_txs = [t for t in txs if not start or _in_range(t.get("date", ""), start, end)]
+    expenses_list = [t for t in in_period_txs if t.get("category") == "biaya"]
+    other_income_list = [t for t in in_period_txs if t.get("category") == "pendapatan_lain"]
     total_expenses = sum(float(t.get("expense", 0) or 0) for t in expenses_list)
     other_income = sum(float(t.get("income", 0) or 0) for t in other_income_list)
 
     net_profit = gross_profit - total_expenses + other_income
 
     return {
+        "period": {"start": start, "end": end},
         "sales": sales,
         "cogs": cogs,
         "gross_profit": gross_profit,
@@ -493,21 +685,21 @@ async def profit_loss(user: dict = Depends(get_current_user)):
 async def balance_sheet(user: dict = Depends(get_current_user)):
     bb = await db.beginning_balance.find_one({"user_id": user["id"]}) or _empty_balance(user["id"])
 
-    txs = await db.transactions.find({"user_id": user["id"]}).to_list(2000)
+    txs = await db.transactions.find({"user_id": user["id"]}).to_list(5000)
     net_cash_change = sum(float(t.get("income", 0) or 0) - float(t.get("expense", 0) or 0) for t in txs)
 
     # Current jersey inventory value = sum of total cost for not sold items
     items = await db.ready_stock.find({"user_id": user["id"]}).to_list(2000)
-    inventory_value = sum(_ready_total(i) for i in items if i.get("status", "").lower() != "terjual")
+    current_inventory = sum(_ready_total(i) for i in items if i.get("status", "").lower() != "terjual")
 
     kas = float(bb.get("kas", 0)) + float(bb.get("kas_bank", 0)) + net_cash_change
     piutang = float(bb.get("piutang", 0))
-    persediaan_jersey = inventory_value if inventory_value > 0 else float(bb.get("persediaan_jersey", 0))
+    persediaan_jersey = float(bb.get("persediaan_jersey", 0)) + current_inventory
     perlengkapan_jersey = float(bb.get("perlengkapan_jersey", 0))
     perlengkapan = float(bb.get("perlengkapan", 0))
     total_aktiva = kas + piutang + persediaan_jersey + perlengkapan_jersey + perlengkapan
 
-    # P&L for retained earnings
+    # P&L for retained earnings (all-time)
     pl = await profit_loss(user)
     initial_capital = (float(bb.get("kas", 0)) + float(bb.get("kas_bank", 0)) +
                        float(bb.get("piutang", 0)) + float(bb.get("persediaan_jersey", 0)) +
@@ -558,6 +750,44 @@ async def summary(user: dict = Depends(get_current_user)):
     }
 
 
+@api.get("/dashboard-chart")
+async def dashboard_chart(user: dict = Depends(get_current_user)):
+    """Return last 6 months income vs expense aggregated."""
+    today = datetime.now(timezone.utc).date()
+    buckets = []
+    for i in range(5, -1, -1):
+        # walk back i months
+        y, m = today.year, today.month
+        for _ in range(i):
+            m -= 1
+            if m == 0:
+                m = 12
+                y -= 1
+        start = datetime(y, m, 1).date()
+        next_y, next_m = (y + 1, 1) if m == 12 else (y, m + 1)
+        end = datetime(next_y, next_m, 1).date() - timedelta(days=1)
+        buckets.append({
+            "key": f"{y:04d}-{m:02d}",
+            "label": start.strftime("%b %Y"),
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "income": 0.0,
+            "expense": 0.0,
+        })
+
+    txs = await db.transactions.find({"user_id": user["id"]}).to_list(5000)
+    for tx in txs:
+        d = (tx.get("date") or "")[:10]
+        if not d:
+            continue
+        for b in buckets:
+            if b["start"] <= d <= b["end"]:
+                b["income"] += float(tx.get("income", 0) or 0)
+                b["expense"] += float(tx.get("expense", 0) or 0)
+                break
+    return {"months": buckets}
+
+
 # ----------------------------------------------------------------------------
 # Startup
 # ----------------------------------------------------------------------------
@@ -566,6 +796,8 @@ async def on_startup():
     await db.users.create_index("email", unique=True)
     await db.ready_stock.create_index([("user_id", 1)])
     await db.transactions.create_index([("user_id", 1), ("date", 1)])
+    await db.transactions.create_index([("ready_stock_id", 1)])
+    await db.login_attempts.create_index("identifier")
     await db.files.create_index([("storage_path", 1)])
     # Seed admin
     existing = await db.users.find_one({"email": ADMIN_EMAIL})
