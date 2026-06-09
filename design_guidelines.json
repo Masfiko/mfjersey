@@ -1,0 +1,114 @@
+{
+  "project_name": "MF.Jersey_id Finance Dashboard",
+  "theme": "Light",
+  "archetype": "Archetype 4 (Swiss & High-Contrast) + Sports Heritage",
+  "typography": {
+    "fonts": {
+      "headings": "Cabinet Grotesk",
+      "body": "Manrope",
+      "mono": "IBM Plex Mono"
+    },
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl tracking-tight font-bold text-gray-900",
+      "h2": "text-2xl sm:text-3xl tracking-tight font-semibold text-gray-900",
+      "h3": "text-xl sm:text-2xl tracking-tight font-medium text-gray-900",
+      "h4": "text-lg sm:text-xl tracking-tight font-medium text-gray-900",
+      "body": "text-base text-gray-700 leading-relaxed",
+      "small": "text-sm text-gray-500",
+      "labels": "text-xs font-bold uppercase tracking-[0.2em] text-gray-500"
+    }
+  },
+  "colors": {
+    "background": {
+      "page": "#F7F7F5",
+      "surface": "#FFFFFF",
+      "sidebar": "#FFFFFF"
+    },
+    "text": {
+      "primary": "#111827",
+      "secondary": "#4B5563",
+      "muted": "#9CA3AF"
+    },
+    "brand": {
+      "primary": "#1E3A8A",
+      "primary_hover": "#1E40AF",
+      "accent": "#B91C1C"
+    },
+    "finance": {
+      "positive": "#065F46",
+      "positive_bg": "#ECFDF5",
+      "negative": "#991B1B",
+      "negative_bg": "#FEF2F2",
+      "neutral": "#4B5563",
+      "neutral_bg": "#F3F4F6"
+    },
+    "borders": "#E5E7EB"
+  },
+  "spacing_and_layout": {
+    "philosophy": "Generous Spacing Philosophy with Technical Grid Borders for data. Ensure tables and cards are highly legible.",
+    "dashboard_grid": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6",
+    "card_padding": "p-6 sm:p-8",
+    "section_gap": "gap-8 sm:gap-12"
+  },
+  "components": {
+    "cards": "Flat solid background, 1px subtle border (border-gray-200), no default shadow. Hover: -translate-y-1, shadow-lg, border-gray-300 transition-all duration-200.",
+    "buttons": {
+      "primary": "bg-blue-900 text-white rounded-md px-6 py-2 hover:bg-blue-800 transition-colors font-medium shadow-sm",
+      "secondary": "bg-white border border-gray-300 text-gray-700 rounded-md px-6 py-2 hover:bg-gray-50 transition-colors font-medium shadow-sm",
+      "danger": "bg-red-800 text-white rounded-md px-6 py-2 hover:bg-red-700 transition-colors font-medium shadow-sm"
+    },
+    "tables": "Use Shadcn UI tables. Left-align text, tabular-nums for financial data. 1px border on cells for 'Grid Borders' technical look. Sticky header.",
+    "sidebar": "Light sidebar, border-r border-gray-200. Links: text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-md. Active: bg-blue-50 text-blue-900 font-medium.",
+    "forms": "Use Shadcn UI forms. Inputs: border-gray-300 rounded-md focus:ring-2 focus:ring-blue-900 focus:border-transparent. Upload areas should use dashed borders.",
+    "badges": "Rounded-full px-2.5 py-0.5 text-xs font-medium. Active/In-Stock: bg-green-100 text-green-800. Sold: bg-gray-100 text-gray-800."
+  },
+  "pages": {
+    "login": "Minimalist split layout. Left side: Login form, clean white background, clear typography. Right side: Vintage sports texture/stadium image overlay.",
+    "dashboard": "Summary overview. Top bar (user, date). Hero row (Total Assets, Net Profit, Cash Balance). Middle: Line Chart (Income vs Expense). Bottom: Recent transactions list.",
+    "ready_stock": "Inventory management. Contains a table with columns: Item Name, Image (thumbnails), Purchase Price, Shipping Cost, Remake, Status, Total. Include an 'Add Item' button with image upload.",
+    "beginning_balance": "Form/View layout with cards for Kas, Kas Bank, Piutang (Accounts Receivable), Persediaan Jersey (Inventory), Perlengkapan Jersey, Perlengkapan, Total Aset.",
+    "cash_book": "Ledger table (Buku Kas Bank). Columns: Tanggal, Deskripsi, Pemasukan, Pengeluaran, Saldo. Use text-green-700 for Pemasukan and text-red-700 for Pengeluaran.",
+    "profit_loss": "Structured financial statement view. Distinct rows for Penjualan, HPP, Laba Kotor, Biaya-biaya, Total Pengeluaran, Pendapatan Lain, Laba Bersih/Rugi.",
+    "balance_sheet": "Neraca report view. Standard format displaying Assets (Aktiva) and Liabilities/Equity (Pasiva)."
+  },
+  "media": {
+    "images": {
+      "login_bg": {
+        "url": "https://images.unsplash.com/photo-1554714924-deccbc8021eb?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTB8MHwxfHNlYXJjaHwxfHx2aW50YWdlJTIwc3BvcnRzJTIwdGV4dHVyZXxlbnwwfHx8fDE3ODEwMjUwOTl8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Vintage sports texture for login background"
+      },
+      "stadium_bg": {
+        "url": "https://images.pexels.com/photos/1657324/pexels-photo-1657324.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Soccer stadium at sunset, optional background or hero element"
+      },
+      "jersey_placeholders": [
+        "https://images.unsplash.com/photo-1759447946445-397b1c034768?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDN8MHwxfHNlYXJjaHwyfHx2aW50YWdlJTIwc29jY2VyJTIwamVyc2V5fGVufDB8fHx8MTc4MTAyNTA5OXww&ixlib=rb-4.1.0&q=85",
+        "https://images.unsplash.com/photo-1765791258069-5fce23e2b55a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDN8MHwxfHNlYXJjaHwzfHx2aW50YWdlJTIwc29jY2VyJTIwamVyc2V5fGVufDB8fHx8MTc4MTAyNTA5OXww&ixlib=rb-4.1.0&q=85",
+        "https://images.unsplash.com/photo-1577212017184-80cc0da11082?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDN8MHwxfHNlYXJjaHwxfHx2aW50YWdlJTIwc29jY2VyJTIwamVyc2V5fGVufDB8fHx8MTc4MTAyNTA5OXww&ixlib=rb-4.1.0&q=85"
+      ]
+    }
+  },
+  "libraries_to_install": [
+    "lucide-react",
+    "recharts",
+    "date-fns",
+    "react-hook-form",
+    "@hookform/resolvers",
+    "zod",
+    "clsx",
+    "tailwind-merge"
+  ],
+  "testing": {
+    "attributes": "All interactive elements MUST include data-testid attribute in kebab-case (e.g., data-testid='login-submit-button', data-testid='sidebar-dashboard-link')."
+  },
+  "instructions_to_main_agent": [
+    "Implement the UI using React (.js files), Tailwind CSS, and Shadcn UI components.",
+    "Use Indonesian language for all text and labels (Rupiah IDR currency formatting).",
+    "Do NOT use 'Inter', 'Roboto', or 'Open Sans' for headings. Ensure 'Cabinet Grotesk' or 'Outfit' is used for headings, and 'Manrope' for body text.",
+    "Follow the 'Technical Grid Borders' surface strategy for dashboard cards and tables.",
+    "Ensure generous spacing (p-6, p-8) within cards.",
+    "Mock JWT login flow and dashboard data for the frontend prototype.",
+    "Use the provided vintage jersey placeholder images in the Ready Stock table.",
+    "Format all IDR currencies correctly (e.g., Rp 1.500.000)."
+  ]
+}
