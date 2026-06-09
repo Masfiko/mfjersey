@@ -34,18 +34,25 @@ Build a simple finance website for an original vintage jersey sales business nam
 - Sidebar layout with active state, logout button
 - 100% backend & frontend tests passed
 
+## Iteration 2 (Feb 2026) — P1 Features Shipped
+- **Auto cash-book entries on Ready Stock CRUD**: every Ready Stock add creates a `pembelian` auto-tx (expense = total cost), every status change to `Terjual` creates a `penjualan` auto-tx (income = sale price); revert/delete cleanly removes them. Frontend shows "Otomatis" badge and disables edit/delete on auto rows. → Balance Sheet now self-balances.
+- **Period filter** (Semua / Bulan Ini / Bulan Lalu / Tahun Ini) on Buku Kas Bank and Laporan Laba Rugi. Cash Book computes proper opening_balance from txs prior to the period.
+- **Inline edit** for Cash Book transactions (edit dialog prefilled, PUT /api/cash-book/{id}).
+- **Pemasukan vs Pengeluaran area chart** on Dashboard for last 6 months using recharts (gradient fills, formatted tooltips).
+- **Brute-force lockout** on /api/auth/login: 5 failed attempts → 15-minute lockout. Identifier is email-scoped to survive k8s ingress IP rotation. Successful login clears the counter.
+
 ## Prioritized Backlog
 ### P1 (next)
-- Auto-create cash-book "pembelian" transaction when adding new Ready Stock to keep neraca balanced
-- Date range filter for P&L (bulan / tahun)
-- Edit transaction inline in Cash Book
+- Replace native `<input type="date">` with shadcn Calendar+Popover for consistent UX.
+- Secondary per-IP lockout counter (X-Forwarded-For) as defense-in-depth.
+- Tighten CORS: replace `allow_origins="*"` with explicit preview origin.
 
 ### P2
-- Export to PDF/Excel for laporan
+- Export laporan ke PDF/Excel
 - Multi-period comparison
-- WhatsApp share for ringkasan harian
-- Charts (income vs expense line chart on Dashboard)
-- Brute-force lockout on /auth/login (5 fails = 15min lockout)
+- WhatsApp share kartu produk Ready Stock harian (foto + harga + caption)
+- Edit ready stock dengan history (auto-update auto-tx pembelian saat harga berubah)
+- Split server.py into routers (auth, stock, cash, reports)
 
 ## Files
 - Backend: `/app/backend/server.py` (single-file)
