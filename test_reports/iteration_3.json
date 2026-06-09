@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 3 RETEST — CRITICAL brute-force lockout fix VERIFIED. Pytest: 11/11 PASS (100%). The fix in /app/backend/server.py line 337 (`identifier = f'email:{email}'`) eliminates the previous k8s-ingress-IP-sharding bug; the counter now accumulates per-email regardless of which ingress pod proxies the request. Both TestBruteForce tests pass: (1) 5×401 then 6th=429 with Indonesian message containing 'menit', (2) a different email is NOT locked out after another email is locked. All regression tests still pass: auto-tx sync on Ready Stock create/update(mark-sold)/revert/delete, period filters on /api/cash-book and /api/profit-loss (this_month / last_month / this_year / all), /api/dashboard-chart returns 6 monthly buckets, and the end-to-end balanced scenario (BB kas 1,000,000 → buy 120,000 → sell 200,000 → aktiva 1,080,000 == pasiva 1,080,000, with laba_ditahan = 80,000). Cleared login_attempts collection after the run (3 docs removed) so future logins / tests are not blocked.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/auth/login", "issue": "Lockout is now scoped by email only — an attacker rotating emails can still hammer the endpoint from a single IP. Consider adding a secondary per-IP counter (using X-Forwarded-For) on top of the per-email one for defense in depth."},
+      {"endpoint": "/api/auth/login (cookies)", "issue": "set_auth_cookies still uses secure=False; works in preview but flag for production hardening (Secure flag + SameSite=Strict where possible)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_2.py",
+    "/app/test_reports/pytest/iteration_3_results.xml"
+  ],
+  "action_items": [
+    "(optional) Add a second per-IP counter using X-Forwarded-For to complement the per-email lockout.",
+    "(optional) Refactor TestAutoTxSync to use a pytest fixture instead of returning item_id from test methods — 3 PytestReturnNotNoneWarning warnings remain (harmless, tests still pass).",
+    "(optional, deferred) Replace native browser date inputs in ReadyStock and CashBook with shadcn Calendar+Popover for UX consistency (carried over from iteration_2)."
+  ],
+  "critical_code_review_comments": [
+    "server.py line 337 fix is correct: `identifier = f'email:{email}'` makes the counter survive k8s ingress pod-IP rotation. Good.",
+    "server.py CORS still uses allow_origins='*' with allow_credentials=True — invalid per CORS spec; browsers will refuse to send cookies if a real origin is ever sent. Replace '*' with explicit preview origin from env.",
+    "server.py is still 800+ lines — split into routers (auth/stock/cash/reports) before it grows further.",
+    "_sync_ready_stock_txs is still not transactional; partial failures could drift ready_stock and transactions. Acceptable for MVP.",
+    "Cash book closing_balance excludes future-dated txs from listing but includes them in net_cash_change — minor inconsistency with balance-sheet kas if user dates txs outside the chosen period."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (11/11)", "frontend": "not tested this iteration (backend-only retest)"},
+  "test_credentials": "admin@mfjersey.id / admin123 (seeded). Fresh users created on the fly per test via /api/auth/register.",
+  "seed_data_creation": "No persistent seed data. login_attempts collection cleared (3 docs) after the run to avoid blocking future logins.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 3 closed the critical brute-force lockout bug. All 11 pytest tests in /app/backend/tests/test_iteration_2.py now pass. The fix is at /app/backend/server.py line 337: `identifier = f'email:{email}'`. After future test runs that exercise auth lockout, clear login_attempts collection. Only optional hardening remains (per-IP fallback counter, CORS origin tightening, file-split refactor, native date pickers).",
+  "rca of the issue": "RCA confirmed and FIXED. Previous identifier `f'{ip}:{email}'` used request.client.host which in this k8s deployment returns the ingress proxy pod's IP (observed 10.208.130.77 / 10.208.130.78). Round-robin between proxies sharded the failed-attempt counter across multiple login_attempts documents, so the per-document count never reached 5. Fix: scope identifier by email only (`f'email:{email}'`) — counter now accumulates regardless of which ingress pod handles the request. Verified by pytest TestBruteForce.test_lockout_after_five_failures (5×401 then 429 with Indonesian 'menit' in detail) and TestBruteForce.test_successful_login_clears_lockout (a different email is not locked when one email is locked)."
+}

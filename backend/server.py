@@ -333,8 +333,8 @@ async def register(body: RegisterIn, response: Response):
 @api.post("/auth/login")
 async def login(body: LoginIn, request: Request, response: Response):
     email = body.email.lower().strip()
-    ip = (request.client.host if request.client else "unknown")
-    identifier = f"{ip}:{email}"
+    # Scope by email only so k8s proxy IP rotation doesn't fragment the counter.
+    identifier = f"email:{email}"
     await _check_lockout(identifier)
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(body.password, user["password_hash"]):
