@@ -15,7 +15,7 @@ import {
 import { toast } from "sonner";
 import { Plus, Trash2, Edit, Boxes } from "lucide-react";
 
-const emptyForm = () => ({ name: "", harga: 0, pcs: 1 });
+const emptyForm = () => ({ kode: "", name: "", harga: 0, pcs: 1 });
 
 export default function JerseySupplies() {
   const [items, setItems] = useState([]);
@@ -60,6 +60,7 @@ export default function JerseySupplies() {
     e.preventDefault();
     try {
       const payload = {
+        kode: (form.kode || "").trim(),
         name: form.name,
         harga: Number(form.harga) || 0,
         pcs: parseInt(form.pcs, 10) || 0,
@@ -117,15 +118,27 @@ export default function JerseySupplies() {
                 </DialogTitle>
               </DialogHeader>
               <form onSubmit={submit} className="space-y-4">
-                <div className="space-y-2">
-                  <Label className="text-xs font-bold uppercase tracking-widest text-gray-600">Nama Barang</Label>
-                  <Input
-                    value={form.name}
-                    onChange={(e) => setForm({ ...form, name: e.target.value })}
-                    placeholder="cth. Hanger, Plastik kemasan, Label"
-                    required
-                    data-testid="supply-name-input"
-                  />
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="space-y-2">
+                    <Label className="text-xs font-bold uppercase tracking-widest text-gray-600">Kode Barang</Label>
+                    <Input
+                      value={form.kode}
+                      onChange={(e) => setForm({ ...form, kode: e.target.value.toUpperCase() })}
+                      placeholder="cth. HNG-01"
+                      required
+                      data-testid="supply-kode-input"
+                    />
+                  </div>
+                  <div className="col-span-2 space-y-2">
+                    <Label className="text-xs font-bold uppercase tracking-widest text-gray-600">Nama Barang</Label>
+                    <Input
+                      value={form.name}
+                      onChange={(e) => setForm({ ...form, name: e.target.value })}
+                      placeholder="cth. Hanger, Plastik kemasan, Label"
+                      required
+                      data-testid="supply-name-input"
+                    />
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-2">
@@ -204,9 +217,12 @@ export default function JerseySupplies() {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-28">Kode</TableHead>
                 <TableHead>Nama Barang</TableHead>
                 <TableHead className="text-right">Harga / Pcs</TableHead>
                 <TableHead className="text-right">Pcs</TableHead>
+                <TableHead className="text-right">Terpakai</TableHead>
+                <TableHead className="text-right">Sisa</TableHead>
                 <TableHead className="text-right">Total</TableHead>
                 <TableHead className="text-right">Aksi</TableHead>
               </TableRow>
@@ -214,9 +230,16 @@ export default function JerseySupplies() {
             <TableBody>
               {items.map((item) => (
                 <TableRow key={item.id} data-testid={`supply-row-${item.id}`}>
+                  <TableCell className="font-mono text-xs font-semibold text-blue-900">{item.kode}</TableCell>
                   <TableCell className="font-medium text-gray-900">{item.name}</TableCell>
                   <TableCell className="text-right tabular-nums">{formatRupiah(item.harga)}</TableCell>
                   <TableCell className="text-right tabular-nums">{item.pcs}</TableCell>
+                  <TableCell className="text-right tabular-nums text-gray-500" data-testid={`pcs-used-${item.id}`}>
+                    {item.pcs_used || 0}
+                  </TableCell>
+                  <TableCell className={`text-right tabular-nums font-semibold ${item.pcs_left === 0 ? "text-red-700" : item.pcs_left <= 5 ? "text-amber-700" : "text-emerald-800"}`} data-testid={`pcs-left-${item.id}`}>
+                    {item.pcs_left ?? item.pcs}
+                  </TableCell>
                   <TableCell className="text-right tabular-nums font-semibold">{formatRupiah(item.total)}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex items-center justify-end gap-1">

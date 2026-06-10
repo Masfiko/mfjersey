@@ -202,6 +202,7 @@ class ReadyStockIn(BaseModel):
     image_path: Optional[str] = None
     sale_price: Optional[float] = 0
     sold_date: Optional[str] = None
+    supplies_used: Optional[List[dict]] = None  # [{kode, qty, name?}]
 
 
 class BeginningBalanceIn(BaseModel):
@@ -228,6 +229,7 @@ class BebanIn(BaseModel):
 
 
 class JerseySupplyIn(BaseModel):
+    kode: str
     name: str
     harga: float = 0
     pcs: int = 1
@@ -486,6 +488,47 @@ async def _sync_ready_stock_txs(item: dict, user_id: str):
         await db.transactions.delete_one({"id": existing_sale["id"]})
 
 
+async def _validate_supplies_used(user_id: str, supplies_used, exclude_item_id: Optional[str] = None):
+    """Ensure each kode exists and total qty across all sold items <= base pcs."""
+    if not supplies_used:
+        return
+    # Pre-load all supplies by kode
+    supplies = {}
+    async for s in db.jersey_supplies.find({"user_id": user_id}):
+        supplies[s.get("kode")] = s
+    # Pre-load used map excluding the item being saved
+    used_map = {}
+    cursor = db.ready_stock.find({
+        "user_id": user_id,
+        "status": {"$regex": "^terjual$", "$options": "i"},
+        "supplies_used": {"$exists": True, "$ne": None},
+    })
+    async for it in cursor:
+        if exclude_item_id and it.get("id") == exclude_item_id:
+            continue
+        for s in (it.get("supplies_used") or []):
+            k = s.get("kode")
+            q = int(s.get("qty", 0) or 0)
+            if k and q:
+                used_map[k] = used_map.get(k, 0) + q
+    # Validate each line
+    for line in supplies_used:
+        kode = (line.get("kode") or "").strip()
+        qty = int(line.get("qty", 0) or 0)
+        if not kode or qty <= 0:
+            continue
+        if kode not in supplies:
+            raise HTTPException(status_code=400, detail=f"Kode '{kode}' tidak ditemukan di Perlengkapan Jersey")
+        base = int(supplies[kode].get("pcs", 0) or 0)
+        already_used = used_map.get(kode, 0)
+        if already_used + qty > base:
+            available = base - already_used
+            raise HTTPException(
+                status_code=400,
+                detail=f"Stok '{kode}' tidak cukup. Tersisa {available} pcs.",
+            )
+
+
 @api.get("/ready-stock")
 async def list_ready_stock(user: dict = Depends(get_current_user)):
     items = await db.ready_stock.find({"user_id": user["id"]}).sort("created_at", -1).to_list(1000)
@@ -495,6 +538,8 @@ async def list_ready_stock(user: dict = Depends(get_current_user)):
 @api.post("/ready-stock")
 async def create_ready_stock(body: ReadyStockIn, user: dict = Depends(get_current_user)):
     doc = body.model_dump()
+    if doc.get("status", "").lower() == "terjual":
+        await _validate_supplies_used(user["id"], doc.get("supplies_used"))
     doc["id"] = str(uuid.uuid4())
     doc["user_id"] = user["id"]
     doc["created_at"] = datetime.now(timezone.utc).isoformat()
@@ -506,6 +551,8 @@ async def create_ready_stock(body: ReadyStockIn, user: dict = Depends(get_curren
 @api.put("/ready-stock/{item_id}")
 async def update_ready_stock(item_id: str, body: ReadyStockIn, user: dict = Depends(get_current_user)):
     doc = body.model_dump()
+    if doc.get("status", "").lower() == "terjual":
+        await _validate_supplies_used(user["id"], doc.get("supplies_used"), exclude_item_id=item_id)
     res = await db.ready_stock.update_one(
         {"id": item_id, "user_id": user["id"]},
         {"$set": doc},
@@ -638,11 +685,20 @@ async def _sync_beban_tx(beban: dict, user_id: str):
 
 
 @api.get("/beban")
-async def list_beban(user: dict = Depends(get_current_user)):
+async def list_beban(
+    user: dict = Depends(get_current_user),
+    period: Optional[str] = Query(None),
+    ym: Optional[str] = Query(None),
+    year: Optional[str] = Query(None),
+):
+    start, end = _period_range(period, ym, year)
     items = await db.beban.find({"user_id": user["id"]}).sort("created_at", -1).to_list(2000)
+    result = []
     for i in items:
         i.pop("_id", None)
-    return items
+        if not start or _in_range((i.get("date") or "")[:10], start, end):
+            result.append(i)
+    return result
 
 
 @api.post("/beban")
@@ -719,15 +775,45 @@ async def _sync_supply_tx(item: dict, user_id: str):
         await db.transactions.insert_one(doc)
 
 
+async def _supplies_used_map(user_id: str) -> dict:
+    """Return { kode: total_qty_used } across all Terjual ready_stock items."""
+    cursor = db.ready_stock.find({
+        "user_id": user_id,
+        "status": {"$regex": "^terjual$", "$options": "i"},
+        "supplies_used": {"$exists": True, "$ne": None},
+    })
+    used = {}
+    async for item in cursor:
+        for s in (item.get("supplies_used") or []):
+            kode = s.get("kode")
+            qty = int(s.get("qty", 0) or 0)
+            if kode and qty:
+                used[kode] = used.get(kode, 0) + qty
+    return used
+
+
 @api.get("/jersey-supplies")
 async def list_supplies(user: dict = Depends(get_current_user)):
     items = await db.jersey_supplies.find({"user_id": user["id"]}).sort("created_at", -1).to_list(2000)
-    return [_clean_supply(i) for i in items]
+    used_map = await _supplies_used_map(user["id"])
+    result = []
+    for i in items:
+        cleaned = _clean_supply(i)
+        used = int(used_map.get(cleaned.get("kode") or "", 0))
+        cleaned["pcs_used"] = used
+        cleaned["pcs_left"] = max(0, int(cleaned.get("pcs", 0) or 0) - used)
+        result.append(cleaned)
+    return result
 
 
 @api.post("/jersey-supplies")
 async def create_supply(body: JerseySupplyIn, user: dict = Depends(get_current_user)):
     doc = body.model_dump()
+    doc["kode"] = (doc.get("kode") or "").strip()
+    if not doc["kode"]:
+        raise HTTPException(status_code=400, detail="Kode barang wajib diisi")
+    if await db.jersey_supplies.find_one({"user_id": user["id"], "kode": doc["kode"]}):
+        raise HTTPException(status_code=400, detail=f"Kode '{doc['kode']}' sudah dipakai")
     doc["id"] = str(uuid.uuid4())
     doc["user_id"] = user["id"]
     doc["created_at"] = datetime.now(timezone.utc).isoformat()
@@ -738,9 +824,18 @@ async def create_supply(body: JerseySupplyIn, user: dict = Depends(get_current_u
 
 @api.put("/jersey-supplies/{item_id}")
 async def update_supply(item_id: str, body: JerseySupplyIn, user: dict = Depends(get_current_user)):
+    payload = body.model_dump()
+    payload["kode"] = (payload.get("kode") or "").strip()
+    if not payload["kode"]:
+        raise HTTPException(status_code=400, detail="Kode barang wajib diisi")
+    dup = await db.jersey_supplies.find_one({
+        "user_id": user["id"], "kode": payload["kode"], "id": {"$ne": item_id},
+    })
+    if dup:
+        raise HTTPException(status_code=400, detail=f"Kode '{payload['kode']}' sudah dipakai")
     res = await db.jersey_supplies.update_one(
         {"id": item_id, "user_id": user["id"]},
-        {"$set": body.model_dump()},
+        {"$set": payload},
     )
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Perlengkapan tidak ditemukan")

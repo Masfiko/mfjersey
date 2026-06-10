@@ -18,7 +18,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Plus, Trash2, Edit, Upload } from "lucide-react";
+import { Plus, Trash2, Edit, Upload, X } from "lucide-react";
 
 const STATUSES = ["Tersedia", "Pre-Order", "Terjual"];
 
@@ -38,10 +38,12 @@ const emptyForm = {
   image_path: null,
   sale_price: 0,
   sold_date: "",
+  supplies_used: [],
 };
 
 export default function ReadyStock() {
   const [items, setItems] = useState([]);
+  const [supplies, setSupplies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -50,8 +52,12 @@ export default function ReadyStock() {
 
   const load = async () => {
     try {
-      const { data } = await api.get("/ready-stock");
-      setItems(data);
+      const [{ data: items }, { data: supplies }] = await Promise.all([
+        api.get("/ready-stock"),
+        api.get("/jersey-supplies"),
+      ]);
+      setItems(items);
+      setSupplies(supplies);
     } finally {
       setLoading(false);
     }
@@ -59,9 +65,12 @@ export default function ReadyStock() {
 
   useEffect(() => {
     let active = true;
-    api
-      .get("/ready-stock")
-      .then(({ data }) => active && setItems(data))
+    Promise.all([api.get("/ready-stock"), api.get("/jersey-supplies")])
+      .then(([itemsRes, suppliesRes]) => {
+        if (!active) return;
+        setItems(itemsRes.data);
+        setSupplies(suppliesRes.data);
+      })
       .finally(() => active && setLoading(false));
     return () => {
       active = false;
@@ -85,8 +94,27 @@ export default function ReadyStock() {
       image_path: item.image_path,
       sale_price: item.sale_price || 0,
       sold_date: item.sold_date || "",
+      supplies_used: item.supplies_used || [],
     });
     setOpen(true);
+  };
+
+  const addSupplyLine = () => {
+    setForm((f) => ({ ...f, supplies_used: [...(f.supplies_used || []), { kode: "", qty: 1 }] }));
+  };
+
+  const updateSupplyLine = (idx, patch) => {
+    setForm((f) => ({
+      ...f,
+      supplies_used: (f.supplies_used || []).map((s, i) => (i === idx ? { ...s, ...patch } : s)),
+    }));
+  };
+
+  const removeSupplyLine = (idx) => {
+    setForm((f) => ({
+      ...f,
+      supplies_used: (f.supplies_used || []).filter((_, i) => i !== idx),
+    }));
   };
 
   const handleUpload = async (e) => {
@@ -111,12 +139,19 @@ export default function ReadyStock() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
+      const cleanedSupplies = (form.supplies_used || [])
+        .map((s) => ({
+          kode: (s.kode || "").trim(),
+          qty: parseInt(s.qty, 10) || 0,
+        }))
+        .filter((s) => s.kode && s.qty > 0);
       const payload = {
         ...form,
         purchase_price: Number(form.purchase_price) || 0,
         shipping_cost: Number(form.shipping_cost) || 0,
         remake_cost: Number(form.remake_cost) || 0,
         sale_price: Number(form.sale_price) || 0,
+        supplies_used: form.status === "Terjual" ? cleanedSupplies : [],
       };
       if (editing) {
         await api.put(`/ready-stock/${editing.id}`, payload);
@@ -272,6 +307,84 @@ export default function ReadyStock() {
                         data-testid="sold-date-input"
                       />
                     </div>
+                  </div>
+                )}
+
+                {form.status === "Terjual" && (
+                  <div className="border border-gray-200 rounded-md p-3 space-y-3 bg-gray-50/50" data-testid="supplies-used-section">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs font-bold uppercase tracking-widest text-gray-600">
+                        Perlengkapan Dipakai
+                      </Label>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={addSupplyLine}
+                        className="h-7 text-xs"
+                        data-testid="add-supply-line"
+                        disabled={supplies.length === 0}
+                      >
+                        <Plus className="w-3 h-3 mr-1" /> Tambah
+                      </Button>
+                    </div>
+                    {supplies.length === 0 ? (
+                      <div className="text-xs text-gray-500 italic">
+                        Belum ada perlengkapan tersedia. Tambahkan di menu Perlengkapan Jersey.
+                      </div>
+                    ) : (form.supplies_used || []).length === 0 ? (
+                      <div className="text-xs text-gray-500 italic">
+                        Opsional — tambah jika item ini memakai perlengkapan saat penjualan.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {(form.supplies_used || []).map((line, idx) => {
+                          const supply = supplies.find((s) => s.kode === line.kode);
+                          const sisa = supply ? supply.pcs_left : 0;
+                          return (
+                            <div key={idx} className="flex items-center gap-2" data-testid={`supply-line-${idx}`}>
+                              <Select
+                                value={line.kode}
+                                onValueChange={(v) => updateSupplyLine(idx, { kode: v })}
+                              >
+                                <SelectTrigger className="flex-1 h-9 text-sm" data-testid={`supply-kode-select-${idx}`}>
+                                  <SelectValue placeholder="Pilih kode barang" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {supplies.map((s) => (
+                                    <SelectItem key={s.kode} value={s.kode}>
+                                      <span className="font-mono text-xs">{s.kode}</span> — {s.name} (sisa {s.pcs_left})
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <Input
+                                type="number"
+                                min="1"
+                                value={line.qty}
+                                onChange={(e) => updateSupplyLine(idx, { qty: parseInt(e.target.value, 10) || 0 })}
+                                className="w-20 h-9"
+                                placeholder="Qty"
+                                data-testid={`supply-qty-input-${idx}`}
+                              />
+                              <span className="text-[10px] text-gray-500 font-mono w-16 text-right">
+                                {supply ? `sisa ${sisa}` : ""}
+                              </span>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-9 w-9"
+                                onClick={() => removeSupplyLine(idx)}
+                                data-testid={`remove-supply-line-${idx}`}
+                              >
+                                <X className="w-4 h-4 text-red-700" />
+                              </Button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 )}
 

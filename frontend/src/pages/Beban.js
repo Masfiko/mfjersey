@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { formatRupiah, formatDate } from "@/lib/format";
 import PageHeader from "@/components/PageHeader";
+import PeriodFilter, { periodToParams } from "@/components/PeriodFilter";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,10 +28,11 @@ export default function Beban() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm());
+  const [period, setPeriod] = useState("all");
 
-  const load = async () => {
+  const load = async (p = period) => {
     try {
-      const { data } = await api.get("/beban");
+      const { data } = await api.get("/beban", { params: periodToParams(p) });
       setItems(data);
     } finally {
       setLoading(false);
@@ -40,13 +42,19 @@ export default function Beban() {
   useEffect(() => {
     let active = true;
     api
-      .get("/beban")
+      .get("/beban", { params: periodToParams("all") })
       .then(({ data }) => active && setItems(data))
       .finally(() => active && setLoading(false));
     return () => {
       active = false;
     };
   }, []);
+
+  const onPeriodChange = async (p) => {
+    setPeriod(p);
+    setLoading(true);
+    await load(p);
+  };
 
   const openCreate = () => {
     setEditing(null);
@@ -102,7 +110,9 @@ export default function Beban() {
         title="Beban"
         description="Catat biaya-biaya operasional bisnis (listrik, transport, sewa, dll). Otomatis tersinkron ke Buku Kas Bank & Laporan Laba Rugi."
         action={
-          <Dialog open={open} onOpenChange={setOpen}>
+          <div className="flex items-center gap-3">
+            <PeriodFilter value={period} onChange={onPeriodChange} testid="beban-period" />
+            <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
               <Button
                 onClick={openCreate}
@@ -159,7 +169,8 @@ export default function Beban() {
                 </DialogFooter>
               </form>
             </DialogContent>
-          </Dialog>
+            </Dialog>
+          </div>
         }
       />
 
