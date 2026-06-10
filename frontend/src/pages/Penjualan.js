@@ -26,6 +26,7 @@ const emptyForm = () => ({
   sale_price: 0,
   sold_date: new Date().toISOString().slice(0, 10),
   supplies_used: [],
+  pelloff: 0,
 });
 
 export default function Penjualan() {
@@ -111,6 +112,7 @@ export default function Penjualan() {
         sale_price: Number(form.sale_price) || 0,
         sold_date: form.sold_date,
         supplies_used: cleanedSupplies,
+        pelloff: Number(form.pelloff) || 0,
       };
       if (!payload.ready_stock_id) {
         toast.error("Pilih item ready stock terlebih dahulu");
@@ -140,9 +142,14 @@ export default function Penjualan() {
   const totalProfit = sales.reduce((a, s) => a + Number(s.profit || 0), 0);
 
   const selectedStock = available.find((i) => i.id === form.ready_stock_id);
-  const stockCogs = selectedStock
+  const stockBase = selectedStock
     ? Number(selectedStock.purchase_price || 0) + Number(selectedStock.shipping_cost || 0) + Number(selectedStock.remake_cost || 0)
     : 0;
+  const suppliesCostPreview = (form.supplies_used || []).reduce((acc, line) => {
+    const supply = supplies.find((s) => s.kode === line.kode);
+    return acc + (supply ? Number(supply.harga) * (parseInt(line.qty, 10) || 0) : 0);
+  }, 0);
+  const stockCogs = stockBase + suppliesCostPreview + (Number(form.pelloff) || 0);
   const previewProfit = (Number(form.sale_price) || 0) - stockCogs;
 
   return (
@@ -192,7 +199,7 @@ export default function Penjualan() {
                     </Select>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-3 gap-3">
                     <div className="space-y-2">
                       <Label className="text-xs font-bold uppercase tracking-widest text-gray-600">Harga Jual</Label>
                       <Input
@@ -202,6 +209,17 @@ export default function Penjualan() {
                         onChange={(e) => setForm({ ...form, sale_price: e.target.value })}
                         required
                         data-testid="penjualan-price-input"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-xs font-bold uppercase tracking-widest text-amber-700">Pelloff</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        value={form.pelloff}
+                        onChange={(e) => setForm({ ...form, pelloff: e.target.value })}
+                        placeholder="0"
+                        data-testid="penjualan-pelloff-input"
                       />
                     </div>
                     <div className="space-y-2">
@@ -217,9 +235,27 @@ export default function Penjualan() {
                   </div>
 
                   {selectedStock && (
-                    <div className="bg-gray-50 border border-gray-200 rounded-md p-3 text-xs space-y-1">
-                      <div className="flex justify-between"><span className="text-gray-600">Modal item</span><span className="tabular-nums font-mono">{formatRupiah(stockCogs)}</span></div>
-                      <div className="flex justify-between"><span className="text-gray-600">Laba kotor</span><span className={`tabular-nums font-mono font-bold ${previewProfit >= 0 ? "text-emerald-800" : "text-red-800"}`}>{formatRupiah(previewProfit)}</span></div>
+                    <div className="bg-gray-50 border border-gray-200 rounded-md p-3 text-xs space-y-1" data-testid="penjualan-cost-preview">
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Modal jersey (beli + ongkir + remake)</span>
+                        <span className="tabular-nums font-mono">{formatRupiah(stockBase)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Perlengkapan dipakai</span>
+                        <span className="tabular-nums font-mono">{formatRupiah(suppliesCostPreview)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Pelloff</span>
+                        <span className="tabular-nums font-mono">{formatRupiah(Number(form.pelloff) || 0)}</span>
+                      </div>
+                      <div className="flex justify-between border-t border-gray-300 pt-1 mt-1">
+                        <span className="text-gray-700 font-semibold">Total modal (COGS)</span>
+                        <span className="tabular-nums font-mono font-bold">{formatRupiah(stockCogs)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Laba kotor</span>
+                        <span className={`tabular-nums font-mono font-bold ${previewProfit >= 0 ? "text-emerald-800" : "text-red-800"}`}>{formatRupiah(previewProfit)}</span>
+                      </div>
                     </div>
                   )}
 

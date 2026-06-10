@@ -203,6 +203,7 @@ class ReadyStockIn(BaseModel):
     sale_price: Optional[float] = 0
     sold_date: Optional[str] = None
     supplies_used: Optional[List[dict]] = None  # [{kode, qty, name?}]
+    pelloff: Optional[float] = 0  # additional cost added to modal at sale time
 
 
 class BeginningBalanceIn(BaseModel):
@@ -240,6 +241,7 @@ class PenjualanIn(BaseModel):
     sale_price: float
     sold_date: Optional[str] = None  # YYYY-MM-DD, defaults to today
     supplies_used: Optional[List[dict]] = None  # [{kode, qty}]
+    pelloff: Optional[float] = 0  # additional cost added to modal
 
 
 # ----------------------------------------------------------------------------
@@ -426,6 +428,35 @@ async def me(user: dict = Depends(get_current_user)):
 # ----------------------------------------------------------------------------
 def _ready_total(item: dict) -> float:
     return float(item.get("purchase_price", 0)) + float(item.get("shipping_cost", 0)) + float(item.get("remake_cost", 0))
+
+
+def _supplies_used_cost(item: dict, supplies_lookup: dict) -> float:
+    total = 0.0
+    for s in (item.get("supplies_used") or []):
+        kode = s.get("kode")
+        qty = int(s.get("qty", 0) or 0)
+        info = supplies_lookup.get(kode)
+        if info and qty > 0:
+            total += float(info.get("harga", 0)) * qty
+    return total
+
+
+def _full_cogs(item: dict, supplies_lookup: dict) -> float:
+    """Total COGS for a sold item: base + supplies used + pelloff."""
+    if (item.get("status") or "").lower() != "terjual":
+        return _ready_total(item)
+    return (
+        _ready_total(item)
+        + _supplies_used_cost(item, supplies_lookup)
+        + float(item.get("pelloff", 0) or 0)
+    )
+
+
+async def _supplies_lookup(user_id: str) -> dict:
+    out = {}
+    async for s in db.jersey_supplies.find({"user_id": user_id}):
+        out[s.get("kode")] = {"name": s.get("name"), "harga": float(s.get("harga", 0))}
+    return out
 
 
 def _clean_ready(item: dict) -> dict:
@@ -876,10 +907,7 @@ async def list_penjualan(
         "status": {"$regex": "^terjual$", "$options": "i"},
     }).sort("sold_date", -1).to_list(2000)
 
-    # Look up supplies for human-friendly snapshot
-    supplies = {}
-    async for s in db.jersey_supplies.find({"user_id": user["id"]}):
-        supplies[s.get("kode")] = {"name": s.get("name"), "harga": float(s.get("harga", 0))}
+    supplies_lookup = await _supplies_lookup(user["id"])
 
     result = []
     for i in items:
@@ -887,17 +915,23 @@ async def list_penjualan(
         sd = (i.get("sold_date") or "")[:10]
         if start and not _in_range(sd, start, end):
             continue
-        cogs = _ready_total(i)
+        base_cost = _ready_total(i)
+        supplies_cost = _supplies_used_cost(i, supplies_lookup)
+        pelloff = float(i.get("pelloff", 0) or 0)
+        cogs = base_cost + supplies_cost + pelloff
         sale_price = float(i.get("sale_price", 0) or 0)
-        # Enrich supplies_used with name
+        # Enrich supplies_used with name + line cost
         enriched = []
         for s in (i.get("supplies_used") or []):
             kode = s.get("kode")
-            info = supplies.get(kode, {})
+            info = supplies_lookup.get(kode, {})
+            qty = int(s.get("qty", 0) or 0)
             enriched.append({
                 "kode": kode,
-                "qty": int(s.get("qty", 0) or 0),
+                "qty": qty,
                 "name": info.get("name") or kode,
+                "harga": float(info.get("harga", 0)),
+                "subtotal": float(info.get("harga", 0)) * qty,
             })
         result.append({
             "id": i["id"],
@@ -907,6 +941,9 @@ async def list_penjualan(
             "purchase_price": float(i.get("purchase_price", 0) or 0),
             "shipping_cost": float(i.get("shipping_cost", 0) or 0),
             "remake_cost": float(i.get("remake_cost", 0) or 0),
+            "base_cost": base_cost,
+            "supplies_cost": supplies_cost,
+            "pelloff": pelloff,
             "cogs": cogs,
             "sale_price": sale_price,
             "profit": sale_price - cogs,
@@ -931,6 +968,7 @@ async def create_penjualan(body: PenjualanIn, user: dict = Depends(get_current_u
         "sale_price": float(body.sale_price or 0),
         "sold_date": sold_date,
         "supplies_used": supplies_used,
+        "pelloff": float(body.pelloff or 0),
     }
     await db.ready_stock.update_one(
         {"id": body.ready_stock_id, "user_id": user["id"]},
@@ -951,6 +989,7 @@ async def revert_penjualan(ready_stock_id: str, user: dict = Depends(get_current
         "sale_price": 0,
         "sold_date": None,
         "supplies_used": [],
+        "pelloff": 0,
     }
     await db.ready_stock.update_one(
         {"id": ready_stock_id, "user_id": user["id"]},
@@ -959,6 +998,57 @@ async def revert_penjualan(ready_stock_id: str, user: dict = Depends(get_current
     item.update(update)
     await _sync_ready_stock_txs(item, user["id"])
     return {"ok": True}
+
+
+# Pelloff log: list of sold items that had a pelloff cost
+@api.get("/penjualan/pelloff")
+async def list_pelloff(
+    user: dict = Depends(get_current_user),
+    period: Optional[str] = Query(None),
+    ym: Optional[str] = Query(None),
+    year: Optional[str] = Query(None),
+):
+    start, end = _period_range(period, ym, year)
+    items = await db.ready_stock.find({
+        "user_id": user["id"],
+        "status": {"$regex": "^terjual$", "$options": "i"},
+        "pelloff": {"$gt": 0},
+    }).sort("sold_date", -1).to_list(2000)
+    result = []
+    for i in items:
+        i.pop("_id", None)
+        sd = (i.get("sold_date") or "")[:10]
+        if start and not _in_range(sd, start, end):
+            continue
+        result.append({
+            "id": i["id"],
+            "ready_stock_id": i["id"],
+            "item_name": i.get("item_name"),
+            "image_path": i.get("image_path"),
+            "sold_date": sd,
+            "sale_price": float(i.get("sale_price", 0) or 0),
+            "pelloff": float(i.get("pelloff", 0) or 0),
+        })
+    return result
+
+
+@api.put("/penjualan/{ready_stock_id}/pelloff")
+async def update_pelloff(
+    ready_stock_id: str,
+    body: dict,
+    user: dict = Depends(get_current_user),
+):
+    pelloff = float(body.get("pelloff", 0) or 0)
+    if pelloff < 0:
+        raise HTTPException(status_code=400, detail="Pelloff tidak boleh negatif")
+    item = await db.ready_stock.find_one({"id": ready_stock_id, "user_id": user["id"]})
+    if not item or (item.get("status") or "").lower() != "terjual":
+        raise HTTPException(status_code=404, detail="Penjualan tidak ditemukan")
+    await db.ready_stock.update_one(
+        {"id": ready_stock_id, "user_id": user["id"]},
+        {"$set": {"pelloff": pelloff}},
+    )
+    return {"ok": True, "pelloff": pelloff}
 
 
 # ----------------------------------------------------------------------------
@@ -1044,6 +1134,7 @@ async def profit_loss(
     start, end = _period_range(period, ym, year)
     # Sales = sum of sale_price for terjual items in period
     items = await db.ready_stock.find({"user_id": user["id"]}).to_list(2000)
+    supplies_lookup = await _supplies_lookup(user["id"])
     sold = []
     for i in items:
         if i.get("status", "").lower() != "terjual":
@@ -1052,7 +1143,7 @@ async def profit_loss(
         if not start or _in_range(sd, start, end):
             sold.append(i)
     sales = sum(float(i.get("sale_price", 0) or 0) for i in sold)
-    cogs = sum(_ready_total(i) for i in sold)
+    cogs = sum(_full_cogs(i, supplies_lookup) for i in sold)
     gross_profit = sales - cogs
 
     txs = await db.transactions.find({"user_id": user["id"]}).to_list(5000)
@@ -1100,9 +1191,15 @@ async def balance_sheet(user: dict = Depends(get_current_user)):
     items = await db.ready_stock.find({"user_id": user["id"]}).to_list(2000)
     current_inventory = sum(_ready_total(i) for i in items if i.get("status", "").lower() != "terjual")
 
-    # Current perlengkapan_jersey value = sum of supplies (harga * pcs)
+    # Current perlengkapan_jersey value = sum of remaining stock (harga × pcs_left)
     supplies = await db.jersey_supplies.find({"user_id": user["id"]}).to_list(2000)
-    supplies_value = sum(_supply_total(s) for s in supplies)
+    used_map = await _supplies_used_map(user["id"])
+    supplies_value = 0.0
+    for s in supplies:
+        pcs = int(s.get("pcs", 0) or 0)
+        used = int(used_map.get(s.get("kode") or "", 0))
+        pcs_left = max(0, pcs - used)
+        supplies_value += float(s.get("harga", 0)) * pcs_left
 
     kas = float(bb.get("kas", 0)) + float(bb.get("kas_bank", 0)) + net_cash_change
     piutang = float(bb.get("piutang", 0))

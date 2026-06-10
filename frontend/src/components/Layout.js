@@ -4,6 +4,7 @@ import {
   LayoutDashboard,
   Package,
   ShoppingBag,
+  Layers,
   Boxes,
   Receipt,
   Wallet,
@@ -17,6 +18,7 @@ const navItems = [
   { to: "/", label: "Ringkasan", icon: LayoutDashboard, testid: "nav-summary" },
   { to: "/ready-stock", label: "Ready Stock", icon: Package, testid: "nav-ready-stock" },
   { to: "/penjualan", label: "Penjualan", icon: ShoppingBag, testid: "nav-penjualan" },
+  { to: "/penjualan/pelloff", label: "Pelloff", icon: Layers, testid: "nav-pelloff", sub: true },
   { to: "/perlengkapan", label: "Perlengkapan Jersey", icon: Boxes, testid: "nav-supplies" },
   { to: "/beban", label: "Beban", icon: Receipt, testid: "nav-beban" },
   { to: "/saldo-awal", label: "Saldo Awal", icon: Wallet, testid: "nav-beginning-balance" },
@@ -57,18 +59,20 @@ export default function Layout() {
               <NavLink
                 key={item.to}
                 to={item.to}
-                end={item.to === "/"}
+                end={item.to === "/" || item.to === "/penjualan"}
                 data-testid={item.testid}
                 className={({ isActive }) =>
-                  `flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-colors ${
+                  `flex items-center gap-3 ${item.sub ? "pl-9" : "px-3"} py-2.5 rounded-md text-sm font-medium transition-colors ${
+                    !item.sub ? "" : "pr-3"
+                  } ${
                     isActive
                       ? "bg-blue-50 text-blue-900"
                       : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
                   }`
                 }
               >
-                <Icon className="w-4 h-4" />
-                {item.label}
+                <Icon className={`${item.sub ? "w-3.5 h-3.5" : "w-4 h-4"}`} />
+                <span className={item.sub ? "text-xs" : ""}>{item.label}</span>
               </NavLink>
             );
           })}
