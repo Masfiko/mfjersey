@@ -3,6 +3,8 @@ import { useAuth } from "@/context/AuthContext";
 import {
   LayoutDashboard,
   Package,
+  Boxes,
+  Receipt,
   Wallet,
   BookOpen,
   TrendingUp,
@@ -13,6 +15,8 @@ import {
 const navItems = [
   { to: "/", label: "Ringkasan", icon: LayoutDashboard, testid: "nav-summary" },
   { to: "/ready-stock", label: "Ready Stock", icon: Package, testid: "nav-ready-stock" },
+  { to: "/perlengkapan", label: "Perlengkapan Jersey", icon: Boxes, testid: "nav-supplies" },
+  { to: "/beban", label: "Beban", icon: Receipt, testid: "nav-beban" },
   { to: "/saldo-awal", label: "Saldo Awal", icon: Wallet, testid: "nav-beginning-balance" },
   { to: "/buku-kas", label: "Buku Kas Bank", icon: BookOpen, testid: "nav-cash-book" },
   { to: "/laba-rugi", label: "Laba / Rugi", icon: TrendingUp, testid: "nav-profit-loss" },

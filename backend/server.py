@@ -221,6 +221,18 @@ class TransactionIn(BaseModel):
     category: str = "lainnya"  # penjualan, pembelian, biaya, pendapatan_lain, lainnya
 
 
+class BebanIn(BaseModel):
+    name: str
+    amount: float = 0
+    date: Optional[str] = None  # YYYY-MM-DD
+
+
+class JerseySupplyIn(BaseModel):
+    name: str
+    harga: float = 0
+    pcs: int = 1
+
+
 # ----------------------------------------------------------------------------
 # Period helpers
 # ----------------------------------------------------------------------------
@@ -596,6 +608,157 @@ async def update_beginning_balance(body: BeginningBalanceIn, user: dict = Depend
 
 
 # ----------------------------------------------------------------------------
+# Beban (Operational Expenses)
+# ----------------------------------------------------------------------------
+async def _sync_beban_tx(beban: dict, user_id: str):
+    name = beban.get("name", "Beban")
+    amount = float(beban.get("amount", 0) or 0)
+    beban_id = beban["id"]
+    date = beban.get("date") or datetime.now(timezone.utc).date().isoformat()
+    doc = {
+        "user_id": user_id,
+        "beban_id": beban_id,
+        "kind": "beban",
+        "category": "biaya",
+        "date": date,
+        "description": f"Beban: {name}",
+        "income": 0,
+        "expense": amount,
+        "auto": True,
+    }
+    existing = await db.transactions.find_one({"beban_id": beban_id, "kind": "beban"})
+    if existing:
+        doc["id"] = existing["id"]
+        doc["created_at"] = existing.get("created_at", datetime.now(timezone.utc).isoformat())
+        await db.transactions.update_one({"id": existing["id"]}, {"$set": doc})
+    else:
+        doc["id"] = str(uuid.uuid4())
+        doc["created_at"] = datetime.now(timezone.utc).isoformat()
+        await db.transactions.insert_one(doc)
+
+
+@api.get("/beban")
+async def list_beban(user: dict = Depends(get_current_user)):
+    items = await db.beban.find({"user_id": user["id"]}).sort("created_at", -1).to_list(2000)
+    for i in items:
+        i.pop("_id", None)
+    return items
+
+
+@api.post("/beban")
+async def create_beban(body: BebanIn, user: dict = Depends(get_current_user)):
+    doc = body.model_dump()
+    doc["id"] = str(uuid.uuid4())
+    doc["user_id"] = user["id"]
+    doc["created_at"] = datetime.now(timezone.utc).isoformat()
+    await db.beban.insert_one(doc)
+    await _sync_beban_tx(doc, user["id"])
+    doc.pop("_id", None)
+    return doc
+
+
+@api.put("/beban/{beban_id}")
+async def update_beban(beban_id: str, body: BebanIn, user: dict = Depends(get_current_user)):
+    res = await db.beban.update_one(
+        {"id": beban_id, "user_id": user["id"]},
+        {"$set": body.model_dump()},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Beban tidak ditemukan")
+    doc = await db.beban.find_one({"id": beban_id, "user_id": user["id"]})
+    await _sync_beban_tx(doc, user["id"])
+    doc.pop("_id", None)
+    return doc
+
+
+@api.delete("/beban/{beban_id}")
+async def delete_beban(beban_id: str, user: dict = Depends(get_current_user)):
+    res = await db.beban.delete_one({"id": beban_id, "user_id": user["id"]})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Beban tidak ditemukan")
+    await db.transactions.delete_many({"beban_id": beban_id, "user_id": user["id"]})
+    return {"ok": True}
+
+
+# ----------------------------------------------------------------------------
+# Perlengkapan Jersey (Jersey Supplies inventory)
+# ----------------------------------------------------------------------------
+def _supply_total(item: dict) -> float:
+    return float(item.get("harga", 0)) * int(item.get("pcs", 0) or 0)
+
+
+def _clean_supply(item: dict) -> dict:
+    item.pop("_id", None)
+    item["total"] = _supply_total(item)
+    return item
+
+
+async def _sync_supply_tx(item: dict, user_id: str):
+    total = _supply_total(item)
+    name = item.get("name", "Perlengkapan")
+    item_id = item["id"]
+    doc = {
+        "user_id": user_id,
+        "supply_id": item_id,
+        "kind": "supply",
+        "category": "pembelian",
+        "date": (item.get("created_at") or datetime.now(timezone.utc).isoformat())[:10],
+        "description": f"Perlengkapan: {name} ({item.get('pcs', 0)} pcs)",
+        "income": 0,
+        "expense": total,
+        "auto": True,
+    }
+    existing = await db.transactions.find_one({"supply_id": item_id, "kind": "supply"})
+    if existing:
+        doc["id"] = existing["id"]
+        doc["created_at"] = existing.get("created_at", datetime.now(timezone.utc).isoformat())
+        await db.transactions.update_one({"id": existing["id"]}, {"$set": doc})
+    else:
+        doc["id"] = str(uuid.uuid4())
+        doc["created_at"] = datetime.now(timezone.utc).isoformat()
+        await db.transactions.insert_one(doc)
+
+
+@api.get("/jersey-supplies")
+async def list_supplies(user: dict = Depends(get_current_user)):
+    items = await db.jersey_supplies.find({"user_id": user["id"]}).sort("created_at", -1).to_list(2000)
+    return [_clean_supply(i) for i in items]
+
+
+@api.post("/jersey-supplies")
+async def create_supply(body: JerseySupplyIn, user: dict = Depends(get_current_user)):
+    doc = body.model_dump()
+    doc["id"] = str(uuid.uuid4())
+    doc["user_id"] = user["id"]
+    doc["created_at"] = datetime.now(timezone.utc).isoformat()
+    await db.jersey_supplies.insert_one(doc)
+    await _sync_supply_tx(doc, user["id"])
+    return _clean_supply(doc)
+
+
+@api.put("/jersey-supplies/{item_id}")
+async def update_supply(item_id: str, body: JerseySupplyIn, user: dict = Depends(get_current_user)):
+    res = await db.jersey_supplies.update_one(
+        {"id": item_id, "user_id": user["id"]},
+        {"$set": body.model_dump()},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Perlengkapan tidak ditemukan")
+    doc = await db.jersey_supplies.find_one({"id": item_id, "user_id": user["id"]})
+    await _sync_supply_tx(doc, user["id"])
+    return _clean_supply(doc)
+
+
+@api.delete("/jersey-supplies/{item_id}")
+async def delete_supply(item_id: str, user: dict = Depends(get_current_user)):
+    res = await db.jersey_supplies.delete_one({"id": item_id, "user_id": user["id"]})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Perlengkapan tidak ditemukan")
+    await db.transactions.delete_many({"supply_id": item_id, "user_id": user["id"]})
+    return {"ok": True}
+
+
+# ----------------------------------------------------------------------------
 # Bank Cash Book
 # ----------------------------------------------------------------------------
 @api.get("/cash-book")
@@ -734,10 +897,14 @@ async def balance_sheet(user: dict = Depends(get_current_user)):
     items = await db.ready_stock.find({"user_id": user["id"]}).to_list(2000)
     current_inventory = sum(_ready_total(i) for i in items if i.get("status", "").lower() != "terjual")
 
+    # Current perlengkapan_jersey value = sum of supplies (harga * pcs)
+    supplies = await db.jersey_supplies.find({"user_id": user["id"]}).to_list(2000)
+    supplies_value = sum(_supply_total(s) for s in supplies)
+
     kas = float(bb.get("kas", 0)) + float(bb.get("kas_bank", 0)) + net_cash_change
     piutang = float(bb.get("piutang", 0))
     persediaan_jersey = float(bb.get("persediaan_jersey", 0)) + current_inventory
-    perlengkapan_jersey = float(bb.get("perlengkapan_jersey", 0))
+    perlengkapan_jersey = float(bb.get("perlengkapan_jersey", 0)) + supplies_value
     perlengkapan = float(bb.get("perlengkapan", 0))
     total_aktiva = kas + piutang + persediaan_jersey + perlengkapan_jersey + perlengkapan
 
@@ -839,6 +1006,10 @@ async def on_startup():
     await db.ready_stock.create_index([("user_id", 1)])
     await db.transactions.create_index([("user_id", 1), ("date", 1)])
     await db.transactions.create_index([("ready_stock_id", 1)])
+    await db.transactions.create_index([("beban_id", 1)])
+    await db.transactions.create_index([("supply_id", 1)])
+    await db.beban.create_index([("user_id", 1)])
+    await db.jersey_supplies.create_index([("user_id", 1)])
     await db.login_attempts.create_index("identifier")
     await db.files.create_index([("storage_path", 1)])
     # Seed admin
