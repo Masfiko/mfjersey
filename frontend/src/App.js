@@ -13,6 +13,7 @@ import ProfitLoss from "@/pages/ProfitLoss";
 import BalanceSheet from "@/pages/BalanceSheet";
 import Beban from "@/pages/Beban";
 import JerseySupplies from "@/pages/JerseySupplies";
+import Penjualan from "@/pages/Penjualan";
 import { Toaster } from "@/components/ui/sonner";
 
 function App() {
@@ -32,6 +33,7 @@ function App() {
           >
             <Route index element={<Dashboard />} />
             <Route path="ready-stock" element={<ReadyStock />} />
+            <Route path="penjualan" element={<Penjualan />} />
             <Route path="perlengkapan" element={<JerseySupplies />} />
             <Route path="beban" element={<Beban />} />
             <Route path="saldo-awal" element={<BeginningBalance />} />

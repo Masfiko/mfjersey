@@ -3,6 +3,7 @@ import { useAuth } from "@/context/AuthContext";
 import {
   LayoutDashboard,
   Package,
+  ShoppingBag,
   Boxes,
   Receipt,
   Wallet,
@@ -15,6 +16,7 @@ import {
 const navItems = [
   { to: "/", label: "Ringkasan", icon: LayoutDashboard, testid: "nav-summary" },
   { to: "/ready-stock", label: "Ready Stock", icon: Package, testid: "nav-ready-stock" },
+  { to: "/penjualan", label: "Penjualan", icon: ShoppingBag, testid: "nav-penjualan" },
   { to: "/perlengkapan", label: "Perlengkapan Jersey", icon: Boxes, testid: "nav-supplies" },
   { to: "/beban", label: "Beban", icon: Receipt, testid: "nav-beban" },
   { to: "/saldo-awal", label: "Saldo Awal", icon: Wallet, testid: "nav-beginning-balance" },

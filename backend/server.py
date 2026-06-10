@@ -235,6 +235,13 @@ class JerseySupplyIn(BaseModel):
     pcs: int = 1
 
 
+class PenjualanIn(BaseModel):
+    ready_stock_id: str
+    sale_price: float
+    sold_date: Optional[str] = None  # YYYY-MM-DD, defaults to today
+    supplies_used: Optional[List[dict]] = None  # [{kode, qty}]
+
+
 # ----------------------------------------------------------------------------
 # Period helpers
 # ----------------------------------------------------------------------------
@@ -850,6 +857,107 @@ async def delete_supply(item_id: str, user: dict = Depends(get_current_user)):
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Perlengkapan tidak ditemukan")
     await db.transactions.delete_many({"supply_id": item_id, "user_id": user["id"]})
+    return {"ok": True}
+
+
+# ----------------------------------------------------------------------------
+# Penjualan (Sales) — view & flow over Ready Stock
+# ----------------------------------------------------------------------------
+@api.get("/penjualan")
+async def list_penjualan(
+    user: dict = Depends(get_current_user),
+    period: Optional[str] = Query(None),
+    ym: Optional[str] = Query(None),
+    year: Optional[str] = Query(None),
+):
+    start, end = _period_range(period, ym, year)
+    items = await db.ready_stock.find({
+        "user_id": user["id"],
+        "status": {"$regex": "^terjual$", "$options": "i"},
+    }).sort("sold_date", -1).to_list(2000)
+
+    # Look up supplies for human-friendly snapshot
+    supplies = {}
+    async for s in db.jersey_supplies.find({"user_id": user["id"]}):
+        supplies[s.get("kode")] = {"name": s.get("name"), "harga": float(s.get("harga", 0))}
+
+    result = []
+    for i in items:
+        i.pop("_id", None)
+        sd = (i.get("sold_date") or "")[:10]
+        if start and not _in_range(sd, start, end):
+            continue
+        cogs = _ready_total(i)
+        sale_price = float(i.get("sale_price", 0) or 0)
+        # Enrich supplies_used with name
+        enriched = []
+        for s in (i.get("supplies_used") or []):
+            kode = s.get("kode")
+            info = supplies.get(kode, {})
+            enriched.append({
+                "kode": kode,
+                "qty": int(s.get("qty", 0) or 0),
+                "name": info.get("name") or kode,
+            })
+        result.append({
+            "id": i["id"],
+            "ready_stock_id": i["id"],
+            "item_name": i.get("item_name"),
+            "image_path": i.get("image_path"),
+            "purchase_price": float(i.get("purchase_price", 0) or 0),
+            "shipping_cost": float(i.get("shipping_cost", 0) or 0),
+            "remake_cost": float(i.get("remake_cost", 0) or 0),
+            "cogs": cogs,
+            "sale_price": sale_price,
+            "profit": sale_price - cogs,
+            "sold_date": sd,
+            "supplies_used": enriched,
+        })
+    return result
+
+
+@api.post("/penjualan")
+async def create_penjualan(body: PenjualanIn, user: dict = Depends(get_current_user)):
+    item = await db.ready_stock.find_one({"id": body.ready_stock_id, "user_id": user["id"]})
+    if not item:
+        raise HTTPException(status_code=404, detail="Item Ready Stock tidak ditemukan")
+    if (item.get("status") or "").lower() == "terjual":
+        raise HTTPException(status_code=400, detail="Item ini sudah terjual")
+    supplies_used = body.supplies_used or []
+    await _validate_supplies_used(user["id"], supplies_used, exclude_item_id=body.ready_stock_id)
+    sold_date = body.sold_date or datetime.now(timezone.utc).date().isoformat()
+    update = {
+        "status": "Terjual",
+        "sale_price": float(body.sale_price or 0),
+        "sold_date": sold_date,
+        "supplies_used": supplies_used,
+    }
+    await db.ready_stock.update_one(
+        {"id": body.ready_stock_id, "user_id": user["id"]},
+        {"$set": update},
+    )
+    item.update(update)
+    await _sync_ready_stock_txs(item, user["id"])
+    return {"ok": True, "id": body.ready_stock_id}
+
+
+@api.delete("/penjualan/{ready_stock_id}")
+async def revert_penjualan(ready_stock_id: str, user: dict = Depends(get_current_user)):
+    item = await db.ready_stock.find_one({"id": ready_stock_id, "user_id": user["id"]})
+    if not item:
+        raise HTTPException(status_code=404, detail="Penjualan tidak ditemukan")
+    update = {
+        "status": "Tersedia",
+        "sale_price": 0,
+        "sold_date": None,
+        "supplies_used": [],
+    }
+    await db.ready_stock.update_one(
+        {"id": ready_stock_id, "user_id": user["id"]},
+        {"$set": update},
+    )
+    item.update(update)
+    await _sync_ready_stock_txs(item, user["id"])
     return {"ok": True}
 
 
