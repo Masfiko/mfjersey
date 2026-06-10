@@ -9,13 +9,12 @@ export function AuthProvider({ children }) {
   const checkedRef = useRef(false);
 
   useEffect(() => {
+    // checkedRef guarantees we only run once across React StrictMode double-mount.
     if (checkedRef.current) return;
     checkedRef.current = true;
-    let active = true;
     const token = getAccessToken();
     if (!token) {
-      Promise.resolve().then(() => {
-        if (!active) return;
+      queueMicrotask(() => {
         setUser(false);
         setLoading(false);
       });
@@ -23,12 +22,12 @@ export function AuthProvider({ children }) {
     }
     api
       .get("/auth/me")
-      .then(({ data }) => active && setUser(data))
-      .catch(() => active && setUser(false))
-      .finally(() => active && setLoading(false));
-    return () => {
-      active = false;
-    };
+      .then(({ data }) => setUser(data))
+      .catch(() => {
+        clearTokens();
+        setUser(false);
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   const login = async (email, password) => {
@@ -49,7 +48,7 @@ export function AuthProvider({ children }) {
     try {
       await api.post("/auth/logout");
     } catch {
-      /* ignore network errors */
+      /* ignore */
     }
     clearTokens();
     setUser(false);
